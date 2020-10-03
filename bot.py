@@ -28,17 +28,25 @@ def getIDFromMention(mention):
     return userId
 
 
-#TODO: limit use of non-leaderboard features to only roles in the list (unless it's empty)
+def userHasScoreReporterRole(user, db):
+    if user.server_permissions.administrator:
+        return True
 
-# def userHasDesignatedRole(user, db):
-#     configCollection = db[CONFIG_DATA_COLLECTION]
-#     configFile = configCollection.find({})
-#
-#     if not configFile or not configFile[REPORT_ROLES_KEY]:
-#         return True
-#
-#     for role in configFile[REPORT_ROLES_KEY]:
-#         if user.roles.find()
+    reportRolesCollection = db[REPORT_ROLES_COLLECTION]
+    roles = reportRolesCollection.find({})
+
+    if not roles:
+        return False
+
+    for role in roles[ROLES_KEY]:
+        if user.roles.find(roles) != -1:
+            return True
+
+    return False
+
+
+def userHasAdminRole(user):
+    return user.guild_permissions.administrator
 
 
 @bot.event
@@ -49,9 +57,19 @@ async def on_ready():
             print(member.name + " " + str(member.id))
 
 
-@bot.command(name="ReportRole")
+# TODO: Test and ensure that non-admins can't call this
+@bot.command(name="toggleReportRole",
+             help="This command (only callable by server admins) adds a role to the list of roles "
+                  "that can report scores if not present, or it removes the role from the list if "
+                  "it is already there.",
+             usage="addReportRole RoleName",
+             aliases=["ToggleReportRole", "togglereportrole"])
 async def toggleReportRole(ctx, roleName: str):
     db = cluster[str(ctx.guild.id)]
+    if not userHasAdminRole(ctx.message.author):
+        await ctx.send("You are not an admin for the ranked bot!")
+        return
+
     collection = db[REPORT_ROLES_COLLECTION]
     configFile = collection.find_one({})
 
@@ -65,7 +83,7 @@ async def toggleReportRole(ctx, roleName: str):
     roles = configFile[ROLES_KEY]
 
     if roleName not in roles:
-        roles += roleName
+        roles += [roleName]
         collection.update_one({}, {"$set": {ROLES_KEY: roles}})
         message = f"The role *{roleName}* has been added to the list of roles that can report scores"
         await ctx.send(message)
@@ -76,7 +94,10 @@ async def toggleReportRole(ctx, roleName: str):
         await ctx.send(message)
 
 
-@bot.command(name='leaderboard')
+@bot.command(name='leaderboard',
+             help="Displays the ranked leaderboard for this server",
+             usage="leaderboard",
+             aliases=["Leaderboard", "LeaderBoard"])
 async def displayLeaderboard(ctx):
     leaderboard = []
 
@@ -105,10 +126,19 @@ async def displayLeaderboard(ctx):
     await ctx.send(message)
 
 
-@bot.command(name='adjust')
+@bot.command(name='adjust',
+             help="Manually adjusts the score of the mentioned player. Can only be called by members with roles that "
+                  "can report scores.",
+             usage="adjust <@Member> <PointChange>",
+             aliases=["Adjust", "adjustPoints", "AdjustPoints", "adjustpoints"])
 async def adjustPoints(ctx, mention: str, points: float):
     playerId = getIDFromMention(mention)
     db = cluster[str(ctx.guild.id)]
+
+    if not userHasScoreReporterRole(ctx.message.author, db):
+        await ctx.send("You are not a score reporter for the ranked bot!")
+        return
+
     collection = db[PLAYER_DATA_COLLECTION]
     collection.find_one_and_update({ID_KEY: playerId}, {"$inc": {POINTS_KEY: points}}, upsert=True)
 
@@ -119,15 +149,17 @@ async def adjustPoints(ctx, mention: str, points: float):
 
     await ctx.send(message)
 
-#TODO: Make the error handling more specific based on the attempted command
+
+# TODO: Get some more error testing in, but this can likely be done after ppl use it and see how it goes
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.errors.MissingRequiredArgument):
-        await ctx.send('Be sure you use all required arguments')
+        message = f"Be sure you use all required arguments! \nThe correct usage is: `{ctx.bot.command_prefix}" \
+                  f"{ctx.command.usage}` "
+        await ctx.send(message)
 
 
 bot.run(TOKEN)
-
 
 """ EXPECTED DATA STRUCTURE
 DATABASE:
