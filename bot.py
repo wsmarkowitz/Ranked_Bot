@@ -6,18 +6,39 @@ from pymongo import MongoClient
 from discord.ext import commands
 from dotenv import load_dotenv
 
-bot = commands.Bot(command_prefix='!')
 load_dotenv()
 cluster = MongoClient(os.getenv('MONGO_DB_URL'))
 
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 PLAYER_DATA_COLLECTION = "player_data"
-REPORT_ROLES_COLLECTION = "report_roles"
+CONFIG_COLLECTION = "config"
 
 ID_KEY = "_id"
 POINTS_KEY = "points"
-ROLES_KEY = "roles"
+
+REPORT_ROLES_KEY = "report_roles"
+DEFAULT_REPORT_ROLES = []
+
+COMMAND_PREFIX_KEY = "command_prefix"
+DEFAULT_COMMAND_PREFIX = "!"
+
+
+INITIAL_CONFIG_FILE = {
+    REPORT_ROLES_KEY: DEFAULT_REPORT_ROLES,
+    COMMAND_PREFIX_KEY: DEFAULT_COMMAND_PREFIX
+}
+
+
+def get_command_prefix(_, message):
+    db = cluster[str(message.guild.id)]
+    collection = db[CONFIG_COLLECTION]
+    configFile = collection.find_one({})
+    command_prefix = configFile[COMMAND_PREFIX_KEY]
+    return command_prefix
+
+
+bot = commands.Bot(command_prefix=get_command_prefix)
 
 
 def getIDFromMention(mention):
@@ -29,16 +50,16 @@ def getIDFromMention(mention):
 
 
 def userHasScoreReporterRole(user, db):
-    if user.server_permissions.administrator:
+    if user.guild_permissions.administrator:
         return True
 
-    reportRolesCollection = db[REPORT_ROLES_COLLECTION]
+    reportRolesCollection = db[CONFIG_COLLECTION]
     roles = reportRolesCollection.find({})
 
     if not roles:
         return False
 
-    for role in roles[ROLES_KEY]:
+    for role in roles[REPORT_ROLES_KEY]:
         if user.roles.find(roles) != -1:
             return True
 
@@ -58,6 +79,23 @@ async def on_ready():
 
 
 # TODO: Test and ensure that non-admins can't call this
+@bot.command(name="changeCommandPrefix",
+             help="This command (only callable by server admins) changes the command prefix",
+             usage="changeCommandPrefix commandPrefix",
+             aliases=["ChangeCommandPrefix", "changecommandprefix"])
+async def changeCommandPrefix(ctx, command_prefix: str):
+    db = cluster[str(ctx.guild.id)]
+    if not userHasAdminRole(ctx.message.author):
+        await ctx.send("You are not an admin for the ranked bot!")
+        return
+
+    collection = db[CONFIG_COLLECTION]
+    collection.update_one({}, {"$set": {COMMAND_PREFIX_KEY: command_prefix}})
+    message = f"The command prefix has been set to `{command_prefix}`!"
+    await ctx.send(message)
+
+
+# TODO: Test and ensure that non-admins can't call this
 @bot.command(name="toggleReportRole",
              help="This command (only callable by server admins) adds a role to the list of roles "
                   "that can report scores if not present, or it removes the role from the list if "
@@ -70,26 +108,22 @@ async def toggleReportRole(ctx, roleName: str):
         await ctx.send("You are not an admin for the ranked bot!")
         return
 
-    collection = db[REPORT_ROLES_COLLECTION]
-    configFile = collection.find_one({})
-
-    print(configFile)
-    if not configFile:
-        collection.insert_one({ROLES_KEY: [roleName]})
-        message = f"The role *{roleName}* has been added to the list of roles that can report scores"
-        await ctx.send(message)
+    if not [True for role in ctx.guild.roles if role.name == roleName]:
+        await ctx.send("That is not a valid role on this server! Remember that this is case sensitive!")
         return
 
-    roles = configFile[ROLES_KEY]
+    collection = db[CONFIG_COLLECTION]
+    configFile = collection.find_one({})
+    report_roles = configFile[REPORT_ROLES_KEY]
 
-    if roleName not in roles:
-        roles += [roleName]
-        collection.update_one({}, {"$set": {ROLES_KEY: roles}})
+    if roleName not in report_roles:
+        report_roles += [roleName]
+        collection.update_one({}, {"$set": {REPORT_ROLES_KEY: report_roles}})
         message = f"The role *{roleName}* has been added to the list of roles that can report scores"
         await ctx.send(message)
     else:
-        roles.remove(roleName)
-        collection.update_one({}, {"$set": {ROLES_KEY: roles}})
+        report_roles.remove(roleName)
+        collection.update_one({}, {"$set": {REPORT_ROLES_KEY: report_roles}})
         message = f"The role *{roleName}* has been removed from the list of roles that can report scores"
         await ctx.send(message)
 
@@ -148,6 +182,13 @@ async def adjustPoints(ctx, mention: str, points: float):
     message = f"{name} has earned {points} {pointWord}!" if points > 0 else f"{name} has lost {-points} {pointWord}."
 
     await ctx.send(message)
+
+
+@bot.event
+async def on_guild_join(guild):
+    db = cluster[str(guild.id)]
+    collection = db[CONFIG_COLLECTION]
+    collection.find_one_and_replace({}, INITIAL_CONFIG_FILE, upsert=True)
 
 
 # TODO: Get some more error testing in, but this can likely be done after ppl use it and see how it goes
