@@ -401,6 +401,50 @@ async def adjustPoints(ctx, mention: str, points: float):
     await ctx.send(message)
 
 
+@bot.command(name='updateMemberTiers',
+             usage="updateMemberTiers",
+             aliases=["UpdateMemberTiers"],
+             help="This updates the tiers for all players. Should primarily be used after updating the thresholds for tiers.")
+async def updateRoles(ctx):
+    db = cluster[str(ctx.guild.id)]
+    player_data_collection = db[PLAYER_DATA_COLLECTION]
+    data = list(player_data_collection.find({}))
+    config_collection = db[CONFIG_COLLECTION]
+    configFile = config_collection.find_one({})
+    guild = ctx.guild
+    tiers = configFile[TIERS_KEY]
+
+    sortedTiers = []
+    for key in tiers:
+        sortedTiers.append([key, tiers[key]])
+
+    def getPoints(lst):
+        return lst[1]
+
+    sortedTiers.sort(key=getPoints, reverse=False)
+
+    roles = []
+    for role_string, _ in sortedTiers:
+        roles.append(discord.utils.get(guild.roles, name=role_string))
+
+    for player in data:
+        points = player["points"]
+        member = await guild.fetch_member(player[ID_KEY])
+        for role in roles:
+            await member.remove_roles(role)
+        for index in range(len(list(sortedTiers))):
+            print(tiers[sortedTiers[index][0]])
+            if tiers[sortedTiers[index][0]] > points:
+                if index == 0:
+                    print("0")
+                    break
+                await member.add_roles(roles[index - 1])
+                break
+        if index != 0:
+            await member.add_roles(roles[-1])
+    await ctx.send("Player roles have been updated")
+
+
 def matchResultPoints(winner_id, loser_id, guild_id):
     tier_difference = 0
     point_difference = 0
@@ -474,13 +518,13 @@ def matchResultPoints(winner_id, loser_id, guild_id):
                                                          point_difference, placement_difference)
     winner_points_earned = max(winner_points_earned, configFile[MIN_POINTS_GAINED_KEY])
     winner_points_earned = min(winner_points_earned, configFile[MAX_POINTS_GAINED_KEY])
-    round(winner_points_earned, 4)
+    winner_points_earned = round(winner_points_earned, 4)
 
     loser_points_lost = parseFormmula.evaluateFormula(configFile[POINTS_LOST_FORMULA_KEY], tier_difference,
                                                       point_difference, placement_difference)
     loser_points_lost = max(loser_points_lost, configFile[MIN_POINTS_LOST_KEY])
     loser_points_lost = min(loser_points_lost, configFile[MAX_POINTS_LOST_KEY])
-    round(loser_points_lost, 4)
+    loser_points_lost = round(loser_points_lost, 4)
 
     winner_info["points"] += winner_points_earned
     loser_info["points"] -= loser_points_lost
@@ -488,8 +532,34 @@ def matchResultPoints(winner_id, loser_id, guild_id):
     player_data_collection.find_one_and_replace({ID_KEY: winner_id}, winner_info, upsert=True)
     player_data_collection.find_one_and_replace({ID_KEY: loser_id}, loser_info, upsert=True)
 
-    pendingResultsCollection = db[PENDING_RESULTS_COLLECTION]
-    return winner_points_earned, loser_points_lost
+    new_winner_tier = -1
+    new_loser_tier = -1
+
+    for tier, points in sortedTiers:
+        print(tier, points)
+        if winner_info["points"] >= points:
+            new_winner_tier += 1
+        else:
+            break
+
+    for tier, points in sortedTiers:
+        if loser_info["points"] >= points:
+            new_loser_tier += 1
+        else:
+            break
+
+    change_winner_tier = {}
+    change_loser_tier = {}
+
+    if winner_tier != new_winner_tier:
+        change_winner_tier['add'] = sortedTiers[new_winner_tier][0] if new_winner_tier >= 0 else False
+        change_winner_tier['remove'] = sortedTiers[winner_tier][0] if winner_tier >= 0 else False
+
+    if loser_tier != new_loser_tier:
+        change_loser_tier['add'] = sortedTiers[new_loser_tier][0] if new_loser_tier >= 0 else False
+        change_loser_tier['remove'] = sortedTiers[loser_tier][0] if loser_tier >= 0 else False
+
+    return winner_points_earned, loser_points_lost, change_winner_tier, change_loser_tier
 
 
 @bot.event
@@ -510,8 +580,27 @@ async def on_raw_reaction_add(payload):
             loser = await guild.fetch_member(int(messageInfo["loser_id"]))
             winner_name = winner.name
             loser_name = loser.name
-            winner_points, loser_points = matchResultPoints(messageInfo["winner_id"], messageInfo["loser_id"],
-                                                            payload.guild_id)
+            winner_points, loser_points, change_winner_tier, change_loser_tier = matchResultPoints(
+                messageInfo["winner_id"], messageInfo["loser_id"],
+                payload.guild_id)
+            if change_winner_tier:
+                if change_winner_tier["add"]:
+                    print(change_winner_tier["add"])
+                    new_winner_role = discord.utils.get(guild.roles, name=change_winner_tier["add"])
+                    await winner.add_roles(new_winner_role)
+                if change_winner_tier["remove"]:
+                    print(change_winner_tier["remove"])
+                    old_winner_role = discord.utils.get(guild.roles, name=change_winner_tier["remove"])
+                    await winner.remove_roles(old_winner_role)
+            if change_loser_tier:
+                if change_loser_tier["add"]:
+                    print(change_loser_tier["add"])
+                    new_loser_role = discord.utils.get(guild.roles, name=change_loser_tier["add"])
+                    await loser.add_roles(new_loser_role)
+                if change_loser_tier["remove"]:
+                    print(change_loser_tier["remove"])
+                    old_loser_role = discord.utils.get(guild.roles, name=change_loser_tier["remove"])
+                    await loser.remove_roles(old_loser_role)
             collection.delete_one({ID_KEY: payload.message_id})
             confirmMessage = f"The result has been confirmed! {winner_name} has earned {winner_points} points while {loser_name} has lost {loser_points} points."
             await channel.send(confirmMessage)
