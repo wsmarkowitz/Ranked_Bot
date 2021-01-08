@@ -46,7 +46,7 @@ def evaluateFormulaArray(formula, tierDifference, pointDifference, placementDiff
         if val == PLACEMENT_DIFFERENCE_SYMBOL:
             return placementDifference
         else:
-            raise SyntaxError("There was a syntax error in the formula. Please check this and try again.")
+            raise SyntaxError("There was a syntax error in the formula. Please check this and try again. Are there any missing spaces?")
     leftParenthesisIndex = formula.index(LEFT_PARENTHESIS_SYMBOL) if LEFT_PARENTHESIS_SYMBOL in formula else None
     if leftParenthesisIndex is not None:
         associatedRightIndex = leftParenthesisIndex + 1 + \

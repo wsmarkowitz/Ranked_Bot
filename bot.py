@@ -5,6 +5,7 @@ from pymongo import MongoClient
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+from util import *
 
 import parseFormmula
 
@@ -12,52 +13,6 @@ load_dotenv()
 cluster = MongoClient(os.getenv('MONGO_DB_URL'))
 
 TOKEN = os.getenv('DISCORD_TOKEN')
-
-PLAYER_DATA_COLLECTION = "player_data"
-CONFIG_COLLECTION = "config"
-PENDING_RESULTS_COLLECTION = "pending_results"
-
-ID_KEY = "_id"
-POINTS_KEY = "points"
-
-# REPORT_ROLES_KEY = "report_roles"
-# DEFAULT_REPORT_ROLES = []
-
-TIERS_KEY = "tiers"
-DEFAULT_TIERS = {}
-
-POINTS_GAINED_FORMULA_KEY = "points_gained_formula"
-DEFAULT_POINTS_GAINED_FORMULA = "5 + ( -1 * POINT_DIFFERENCE / 8 )"
-
-MIN_POINTS_GAINED_KEY = "min_points_gained"
-DEFAULT_MIN_POINTS_GAINED = 1
-
-MAX_POINTS_GAINED_KEY = "max_points_gained"
-DEFAULT_MAX_POINTS_GAINED = 20
-
-POINTS_LOST_FORMULA_KEY = "points_lost_formula"
-DEFAULT_POINTS_LOST_FORMULA = "5 + ( -1 * POINT_DIFFERENCE / 8 )"
-
-MIN_POINTS_LOST_KEY = "min_points_lost"
-DEFAULT_MIN_POINTS_LOST = 1
-
-MAX_POINTS_LOST_KEY = "max_points_lost"
-DEFAULT_MAX_POINTS_LOST = 20
-
-COMMAND_PREFIX_KEY = "command_prefix"
-DEFAULT_COMMAND_PREFIX = "!"
-
-INITIAL_CONFIG_FILE = {
-    # REPORT_ROLES_KEY: DEFAULT_REPORT_ROLES,
-    COMMAND_PREFIX_KEY: DEFAULT_COMMAND_PREFIX,
-    TIERS_KEY: DEFAULT_TIERS,
-    POINTS_GAINED_FORMULA_KEY: DEFAULT_POINTS_GAINED_FORMULA,
-    POINTS_LOST_FORMULA_KEY: DEFAULT_POINTS_LOST_FORMULA,
-    MIN_POINTS_GAINED_KEY: DEFAULT_MIN_POINTS_GAINED,
-    MAX_POINTS_GAINED_KEY: DEFAULT_MAX_POINTS_GAINED,
-    MIN_POINTS_LOST_KEY: DEFAULT_MIN_POINTS_LOST,
-    MAX_POINTS_LOST_KEY: DEFAULT_MAX_POINTS_LOST,
-}
 
 
 def get_command_prefix(_, message):
@@ -73,33 +28,64 @@ intents.members = True
 bot = commands.Bot(command_prefix=get_command_prefix, intents=intents)
 
 
-def getIDFromMention(mention):
-    userId = ""
-    for char in mention:
-        if char.isdigit():
-            userId += char
-    return userId
+def getPoints(lst):
+    return lst[1]
 
 
-# def userHasScoreReporterRole(user, db):
-#     if user.guild_permissions.administrator:
-#         return True
-#
-#     reportRolesCollection = db[CONFIG_COLLECTION]
-#     roles = reportRolesCollection.find({})
-#
-#     if not roles:
-#         return False
-#
-#     for role in roles[REPORT_ROLES_KEY]:
-#         if user.roles.find(roles) != -1:
-#             return True
-#
-#     return False
+def getSortedTiers(guild_id):
+    sortedTiers = []
+
+    db = cluster[str(guild_id)]
+    collection = db[CONFIG_COLLECTION]
+    configFile = collection.find_one({})
+
+    if not TIERS_KEY in configFile.keys():
+        return sortedTiers
+
+    tiers = configFile[TIERS_KEY]
+    for key in tiers:
+        sortedTiers.append([key, tiers[key]])
+    sortedTiers.sort(key=getPoints, reverse=False)
+    return list(sortedTiers)
 
 
-def userHasAdminRole(user):
-    return user.guild_permissions.administrator
+def getCurrentTier(member_points, guild_id):
+    sortedTiers = getSortedTiers(guild_id)
+    member_tier_index = NO_TIER_ROLE_INDEX
+    for tier, points in sortedTiers:
+        print(tier, points)
+        if member_points >= points:
+            member_tier_index += 1
+        else:
+            break
+    tier = '' if member_tier_index == NO_TIER_ROLE_INDEX else sortedTiers[member_tier_index]
+    return tier, member_tier_index
+
+
+async def adjustMemberTierRole(member_id, guild_id):
+    db = cluster[str(guild_id)]
+    player_data_collection = db[PLAYER_DATA_COLLECTION]
+    member_data = player_data_collection.find_one({ID_KEY: member_id})
+    guild = bot.get_guild(guild_id)
+    sortedTiers = getSortedTiers(guild_id)
+
+    member = await guild.fetch_member(member_id)
+    points = member_data[POINTS_KEY]
+    correct_role_string, _ = getCurrentTier(points, guild_id)
+
+    if correct_role_string:
+        correct_role_string = correct_role_string[0]
+
+    for role in member.roles:
+        if correct_role_string == role.name:
+            return
+
+    for role_string, _ in sortedTiers:
+        if role_string != correct_role_string:
+            await member.remove_roles(discord.utils.get(guild.roles, name=role_string))
+    if correct_role_string:
+        print(correct_role_string)
+        await member.add_roles(discord.utils.get(guild.roles, name=correct_role_string))
 
 
 @bot.event
@@ -110,7 +96,6 @@ async def on_ready():
             print(member.name + " " + str(member.id))
 
 
-# TODO: Test and ensure that non-admins can't call this
 @bot.command(name="changeCommandPrefix",
              help="This command changes the bot's command prefix. Only usable by server admins.",
              usage="changeCommandPrefix newCommandPrefix",
@@ -279,29 +264,12 @@ async def removeTier(ctx, roleName: str):
              help="Displays the tier names and their minimum point values.",
              aliases=["viewtiers", "ViewTiers", "Viewtiers"])
 async def viewTiers(ctx):
-    sortedTiers = []
-
-    def getPoints(lst):
-        return lst[1]
-
-    db = cluster[str(ctx.guild.id)]
-    collection = db[CONFIG_COLLECTION]
-    configFile = collection.find_one({})
-
-    print(configFile)
-
-    if not TIERS_KEY in configFile.keys():
+    sortedTiers = getSortedTiers(ctx.guild.id)
+    if len(sortedTiers) == 0:
         ctx.send("There are currently no tiers!")
         return
-    tiers = configFile[TIERS_KEY]
-
-    print(tiers)
-
-    for key in tiers:
-        sortedTiers.append([key, tiers[key]])
 
     message = "```TIER LISTING\n"
-    sortedTiers.sort(key=getPoints, reverse=False)
 
     for tier in sortedTiers:
         message += "\n" + tier[0] + ": " + str(tier[1])
@@ -316,9 +284,6 @@ async def viewTiers(ctx):
 async def displayLeaderboard(ctx):
     leaderboard = []
 
-    def getPoints(lst):
-        return lst[1]
-
     db = cluster[str(ctx.guild.id)]
     collection = db[PLAYER_DATA_COLLECTION]
     data = list(collection.find({}))
@@ -328,14 +293,13 @@ async def displayLeaderboard(ctx):
         await ctx.send("There are current no players on the leaderboard!")
 
     for entry in data:
-        # user = await ctx.guild.fetch_member(int(entry[ID_KEY]))
         user = ctx.guild.get_member(int(entry[ID_KEY]))
         print(user)
         if user is not None:
-            leaderboard.append([user.display_name, entry["points"]])
+            leaderboard.append([user.display_name, entry[POINTS_KEY]])
             print(user.display_name)
 
-    message = ""
+    message = "```"
     rank = 0
     leaderboard.sort(key=getPoints, reverse=True)
 
@@ -343,6 +307,7 @@ async def displayLeaderboard(ctx):
         rank += 1
         message += "\n" + str(rank) + ". " + person[0] + " (" + str(person[1]) + ")"
 
+    message += "```"
     await ctx.send(message)
 
 
@@ -368,10 +333,10 @@ async def reportResult(ctx, winnerMention: str, loserMention: str):
 
     pendingResultDetails = {
         ID_KEY: sent_message.id,
-        "winner_id": winner_id,
-        "loser_id": loser_id,
-        "winner_confirmed": ctx.author.id == int(winner_id),
-        "loser_confirmed": ctx.author.id == int(loser_id)
+        WINNER_ID_KEY: winner_id,
+        LOSER_ID_KEY: loser_id,
+        WINNER_CONFIRMED_KEY: ctx.author.id == int(winner_id),
+        LOSER_CONFIRMED_KEY: ctx.author.id == int(loser_id)
     }
 
     collection.insert_one(pendingResultDetails)
@@ -392,12 +357,14 @@ async def adjustPoints(ctx, mention: str, points: float):
 
     collection = db[PLAYER_DATA_COLLECTION]
     collection.find_one_and_update({ID_KEY: playerId}, {"$inc": {POINTS_KEY: points}}, upsert=True)
+    config_collection = db[CONFIG_COLLECTION]
 
     pointWord = "point" if abs(points) == 1 else "points"
     member = await ctx.guild.fetch_member(int(playerId))
     name = member.display_name
     message = f"{name} has earned {points} {pointWord}!" if points > 0 else f"{name} has lost {-points} {pointWord}."
 
+    await adjustMemberTierRole(playerId, ctx.guild.id)
     await ctx.send(message)
 
 
@@ -409,45 +376,26 @@ async def updateRoles(ctx):
     db = cluster[str(ctx.guild.id)]
     player_data_collection = db[PLAYER_DATA_COLLECTION]
     data = list(player_data_collection.find({}))
-    config_collection = db[CONFIG_COLLECTION]
-    configFile = config_collection.find_one({})
     guild = ctx.guild
-    tiers = configFile[TIERS_KEY]
 
-    sortedTiers = []
-    for key in tiers:
-        sortedTiers.append([key, tiers[key]])
-
-    def getPoints(lst):
-        return lst[1]
-
-    sortedTiers.sort(key=getPoints, reverse=False)
+    sortedTiers = getSortedTiers(guild.id)
 
     roles = []
     for role_string, _ in sortedTiers:
         roles.append(discord.utils.get(guild.roles, name=role_string))
 
     for player in data:
-        points = player["points"]
+        points = player[POINTS_KEY]
         member = await guild.fetch_member(player[ID_KEY])
         for role in roles:
             await member.remove_roles(role)
-        for index in range(len(list(sortedTiers))):
-            print(tiers[sortedTiers[index][0]])
-            if tiers[sortedTiers[index][0]] > points:
-                if index == 0:
-                    print("0")
-                    break
-                await member.add_roles(roles[index - 1])
-                break
-        if index != 0:
-            await member.add_roles(roles[-1])
+        _, tier_index = getCurrentTier(points, guild.id)
+        await member.add_roles(roles[tier_index])
+
     await ctx.send("Player roles have been updated")
 
 
 def matchResultPoints(winner_id, loser_id, guild_id):
-    tier_difference = 0
-    point_difference = 0
     placement_difference = 0
 
     db = cluster[str(guild_id)]
@@ -459,7 +407,7 @@ def matchResultPoints(winner_id, loser_id, guild_id):
     if len(winner_info) == 0:
         winner_info = {
             ID_KEY: winner_id,
-            "points": 0
+            POINTS_KEY: 0
         }
     else:
         winner_info = winner_info[0]
@@ -468,52 +416,30 @@ def matchResultPoints(winner_id, loser_id, guild_id):
     if len(loser_info) == 0:
         loser_info = {
             ID_KEY: loser_id,
-            "points": 0
+            POINTS_KEY: 0
         }
     else:
         loser_info = loser_info[0]
 
-    isUpset = loser_info["points"] > winner_info["points"]
-    maxPoints = loser_info["points"] if isUpset else winner_info["points"]
-    minPoints = winner_info["points"] if isUpset else loser_info["points"]
+    isUpset = loser_info[POINTS_KEY] > winner_info[POINTS_KEY]
+    maxPoints = loser_info[POINTS_KEY] if isUpset else winner_info[POINTS_KEY]
+    minPoints = winner_info[POINTS_KEY] if isUpset else loser_info[POINTS_KEY]
     if minPoints != maxPoints:
-        placement_difference = sum(map(lambda entry: minPoints < entry["points"] < maxPoints, data)) + 1
+        placement_difference = sum(map(lambda entry: minPoints < entry[POINTS_KEY] < maxPoints, data)) + 1
         placement_difference = -1 * placement_difference if isUpset else placement_difference
 
     config_collection = db[CONFIG_COLLECTION]
     configFile = config_collection.find_one({})
 
-    if not TIERS_KEY in configFile.keys():
+    sortedTiers = getSortedTiers(guild_id)
+    if len(sortedTiers) == 0:
         tier_difference = 0
     else:
-        tiers = configFile[TIERS_KEY]
-        print(tiers)
-        sortedTiers = []
-        for key in tiers:
-            sortedTiers.append([key, tiers[key]])
+        _, old_winner_tier_index = getCurrentTier(winner_info[POINTS_KEY], guild_id)
+        _, old_loser_tier_index = getCurrentTier(loser_info[POINTS_KEY], guild_id)
+        tier_difference = old_winner_tier_index - old_loser_tier_index
 
-        def getPoints(lst):
-            return lst[1]
-
-        sortedTiers.sort(key=getPoints, reverse=False)
-        winner_tier = -1
-        loser_tier = -1
-
-        for tier, points in sortedTiers:
-            print(tier, points)
-            if winner_info["points"] >= points:
-                winner_tier += 1
-            else:
-                break
-
-        for tier, points in sortedTiers:
-            if loser_info["points"] >= points:
-                loser_tier += 1
-            else:
-                break
-
-        tier_difference = winner_tier - loser_tier
-    point_difference = winner_info["points"] - loser_info["points"]
+    point_difference = winner_info[POINTS_KEY] - loser_info[POINTS_KEY]
     winner_points_earned = parseFormmula.evaluateFormula(configFile[POINTS_GAINED_FORMULA_KEY], tier_difference,
                                                          point_difference, placement_difference)
     winner_points_earned = max(winner_points_earned, configFile[MIN_POINTS_GAINED_KEY])
@@ -526,40 +452,17 @@ def matchResultPoints(winner_id, loser_id, guild_id):
     loser_points_lost = min(loser_points_lost, configFile[MAX_POINTS_LOST_KEY])
     loser_points_lost = round(loser_points_lost, 4)
 
-    winner_info["points"] += winner_points_earned
-    loser_info["points"] -= loser_points_lost
+    winner_info[POINTS_KEY] += winner_points_earned
+    loser_info[POINTS_KEY] -= loser_points_lost
 
     player_data_collection.find_one_and_replace({ID_KEY: winner_id}, winner_info, upsert=True)
     player_data_collection.find_one_and_replace({ID_KEY: loser_id}, loser_info, upsert=True)
 
-    new_winner_tier = -1
-    new_loser_tier = -1
+    new_winner_tier, new_winner_tier_index = getCurrentTier(winner_info[POINTS_KEY], guild_id)
+    new_loser_tier, new_loser_tier_index = getCurrentTier(loser_info[POINTS_KEY], guild_id)
 
-    for tier, points in sortedTiers:
-        print(tier, points)
-        if winner_info["points"] >= points:
-            new_winner_tier += 1
-        else:
-            break
-
-    for tier, points in sortedTiers:
-        if loser_info["points"] >= points:
-            new_loser_tier += 1
-        else:
-            break
-
-    change_winner_tier = {}
-    change_loser_tier = {}
-
-    if winner_tier != new_winner_tier:
-        change_winner_tier['add'] = sortedTiers[new_winner_tier][0] if new_winner_tier >= 0 else False
-        change_winner_tier['remove'] = sortedTiers[winner_tier][0] if winner_tier >= 0 else False
-
-    if loser_tier != new_loser_tier:
-        change_loser_tier['add'] = sortedTiers[new_loser_tier][0] if new_loser_tier >= 0 else False
-        change_loser_tier['remove'] = sortedTiers[loser_tier][0] if loser_tier >= 0 else False
-
-    return winner_points_earned, loser_points_lost, change_winner_tier, change_loser_tier
+    print(new_winner_tier, new_loser_tier)
+    return winner_points_earned, loser_points_lost
 
 
 @bot.event
@@ -568,39 +471,26 @@ async def on_raw_reaction_add(payload):
     collection = db[PENDING_RESULTS_COLLECTION]
     messageInfo = collection.find_one({ID_KEY: payload.message_id})
     if messageInfo and str(messageInfo[ID_KEY]) == str(payload.message_id):
-        if str(messageInfo["winner_id"]) == str(payload.user_id):
-            messageInfo["winner_confirmed"] = True
-        elif str(messageInfo["loser_id"]) == str(payload.user_id):
-            messageInfo["loser_confirmed"] = True
-        if messageInfo["winner_confirmed"] and messageInfo["loser_confirmed"]:
+        if str(messageInfo[WINNER_ID_KEY]) == str(payload.user_id):
+            messageInfo[WINNER_CONFIRMED_KEY] = True
+        elif str(messageInfo[LOSER_ID_KEY]) == str(payload.user_id):
+            messageInfo[LOSER_CONFIRMED_KEY] = True
+        if messageInfo[WINNER_CONFIRMED_KEY] and messageInfo[LOSER_CONFIRMED_KEY]:
             channel = bot.get_channel(payload.channel_id)
             assert channel
+
             guild = bot.get_guild(payload.guild_id)
-            winner = await guild.fetch_member(int(messageInfo["winner_id"]))
-            loser = await guild.fetch_member(int(messageInfo["loser_id"]))
+            winner = await guild.fetch_member(int(messageInfo[WINNER_ID_KEY]))
+            loser = await guild.fetch_member(int(messageInfo[LOSER_ID_KEY]))
             winner_name = winner.name
             loser_name = loser.name
-            winner_points, loser_points, change_winner_tier, change_loser_tier = matchResultPoints(
-                messageInfo["winner_id"], messageInfo["loser_id"],
+
+            winner_points, loser_points= matchResultPoints(
+                messageInfo[WINNER_ID_KEY], messageInfo[LOSER_ID_KEY],
                 payload.guild_id)
-            if change_winner_tier:
-                if change_winner_tier["add"]:
-                    print(change_winner_tier["add"])
-                    new_winner_role = discord.utils.get(guild.roles, name=change_winner_tier["add"])
-                    await winner.add_roles(new_winner_role)
-                if change_winner_tier["remove"]:
-                    print(change_winner_tier["remove"])
-                    old_winner_role = discord.utils.get(guild.roles, name=change_winner_tier["remove"])
-                    await winner.remove_roles(old_winner_role)
-            if change_loser_tier:
-                if change_loser_tier["add"]:
-                    print(change_loser_tier["add"])
-                    new_loser_role = discord.utils.get(guild.roles, name=change_loser_tier["add"])
-                    await loser.add_roles(new_loser_role)
-                if change_loser_tier["remove"]:
-                    print(change_loser_tier["remove"])
-                    old_loser_role = discord.utils.get(guild.roles, name=change_loser_tier["remove"])
-                    await loser.remove_roles(old_loser_role)
+
+            await adjustMemberTierRole(messageInfo[WINNER_ID_KEY], payload.guild_id)
+            await adjustMemberTierRole(messageInfo[LOSER_ID_KEY], payload.guild_id)
             collection.delete_one({ID_KEY: payload.message_id})
             confirmMessage = f"The result has been confirmed! {winner_name} has earned {winner_points} points while {loser_name} has lost {loser_points} points."
             await channel.send(confirmMessage)
