@@ -53,7 +53,6 @@ def getCurrentTier(member_points, guild_id):
     sortedTiers = getSortedTiers(guild_id)
     member_tier_index = NO_TIER_ROLE_INDEX
     for tier, points in sortedTiers:
-        print(tier, points)
         if member_points >= points:
             member_tier_index += 1
         else:
@@ -84,8 +83,21 @@ async def adjustMemberTierRole(member_id, guild_id):
         if role_string != correct_role_string:
             await member.remove_roles(discord.utils.get(guild.roles, name=role_string))
     if correct_role_string:
-        print(correct_role_string)
         await member.add_roles(discord.utils.get(guild.roles, name=correct_role_string))
+
+
+async def try_fetch_member(member_id, guild):
+    try:
+        user = await guild.fetch_member(member_id)
+        return user
+    except discord.HTTPException as e:
+        print("Error retrieving members")
+        print(e)
+        return None
+    except discord.Forbidden as e:
+        print("Error retrieving members")
+        print(e)
+        return None
 
 
 @bot.event
@@ -142,9 +154,7 @@ async def pointsGainedFomula(ctx, formula: str, minRange=None, maxRange=None):
     if minRange:
         minPoints = float(minRange) if minRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
         collection.update_one({}, {"$set": {MIN_POINTS_GAINED_KEY: minPoints}})
-        print(minPoints)
         message += "\nMinimum Points " + str(minPoints)
-        print(message)
 
     if maxRange:
         maxPoints = float(maxRange) if maxRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
@@ -185,9 +195,7 @@ async def pointsLostFomula(ctx, formula: str, minRange=None, maxRange=None):
     if minRange:
         minPoints = float(minRange) if minRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
         collection.update_one({}, {"$set": {MIN_POINTS_LOST_KEY: minPoints}})
-        print(minPoints)
         message += "\nMinimum Points " + str(minPoints)
-        print(message)
 
     if maxRange:
         maxPoints = float(maxRange) if maxRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
@@ -215,12 +223,10 @@ async def setTier(ctx, roleName: str, points: float):
 
     collection = db[CONFIG_COLLECTION]
     configFile = collection.find_one({})
-    print(configFile)
 
     tiers = {}
     if TIERS_KEY in configFile.keys():
         tiers = configFile[TIERS_KEY]
-    print(tiers)
 
     tiers[roleName] = points
     collection.update_one({}, {"$set": {TIERS_KEY: tiers}})
@@ -245,9 +251,7 @@ async def removeTier(ctx, roleName: str):
         return
     keys = list(configFile[TIERS_KEY].keys())
     indices = range(len(keys))
-    print(keys)
     matchingIndices = [index for index in indices if keys[index] == roleName]
-    print(matchingIndices)
     if len(matchingIndices) == 0:
         await ctx.send("That is not a role already set! Remember that this is case sensitive!")
         return
@@ -287,17 +291,14 @@ async def displayLeaderboard(ctx):
     db = cluster[str(ctx.guild.id)]
     collection = db[PLAYER_DATA_COLLECTION]
     data = list(collection.find({}))
-    print(data)
 
     if not data:
         await ctx.send("There are current no players on the leaderboard!")
 
     for entry in data:
-        user = ctx.guild.get_member(int(entry[ID_KEY]))
-        print(user)
+        user = await try_fetch_member(int(entry[ID_KEY]), ctx.guild)
         if user is not None:
             leaderboard.append([user.display_name, entry[POINTS_KEY]])
-            print(user.display_name)
 
     message = "```"
     rank = 0
@@ -368,6 +369,9 @@ async def adjustPoints(ctx, mention: str, points: float):
     await ctx.send(message)
 
 
+
+
+
 @bot.command(name='updateMemberTiers',
              usage="updateMemberTiers",
              aliases=["UpdateMemberTiers"],
@@ -384,24 +388,33 @@ async def updateRoles(ctx):
     for role_string, _ in sortedTiers:
         roles.append(discord.utils.get(guild.roles, name=role_string))
 
+    if len(roles) == 0:
+        await ctx.send("There are no currently set tiers.")
+        return
+
     for player in data:
         points = player[POINTS_KEY]
-        member = await guild.fetch_member(player[ID_KEY])
+        member = await try_fetch_member(player[ID_KEY], guild)
+        if not member:
+            continue
+
         for role in roles:
             await member.remove_roles(role)
         _, tier_index = getCurrentTier(points, guild.id)
+
+        if tier_index == NO_TIER_ROLE_INDEX:
+            continue
         await member.add_roles(roles[tier_index])
 
     await ctx.send("Player roles have been updated")
 
 
-def matchResultPoints(winner_id, loser_id, guild_id):
+async def matchResultPoints(winner_id, loser_id, guild_id):
     placement_difference = 0
 
     db = cluster[str(guild_id)]
     player_data_collection = db[PLAYER_DATA_COLLECTION]
     data = list(player_data_collection.find({}))
-    print(data)
 
     winner_info = [entry for entry in data if entry[ID_KEY] == winner_id]
     if len(winner_info) == 0:
@@ -424,8 +437,13 @@ def matchResultPoints(winner_id, loser_id, guild_id):
     isUpset = loser_info[POINTS_KEY] > winner_info[POINTS_KEY]
     maxPoints = loser_info[POINTS_KEY] if isUpset else winner_info[POINTS_KEY]
     minPoints = winner_info[POINTS_KEY] if isUpset else loser_info[POINTS_KEY]
+    points_for_members_in_server = []
+    for entry in data:
+        member = await try_fetch_member(entry[ID_KEY], bot.get_guild(guild_id))
+        if member:
+            points_for_members_in_server.append(entry[POINTS_KEY])
     if minPoints != maxPoints:
-        placement_difference = sum(map(lambda entry: minPoints < entry[POINTS_KEY] < maxPoints, data)) + 1
+        placement_difference = sum(map(lambda points: minPoints < points < maxPoints, points_for_members_in_server)) + 1
         placement_difference = -1 * placement_difference if isUpset else placement_difference
 
     config_collection = db[CONFIG_COLLECTION]
@@ -444,13 +462,13 @@ def matchResultPoints(winner_id, loser_id, guild_id):
                                                          point_difference, placement_difference)
     winner_points_earned = max(winner_points_earned, configFile[MIN_POINTS_GAINED_KEY])
     winner_points_earned = min(winner_points_earned, configFile[MAX_POINTS_GAINED_KEY])
-    winner_points_earned = round(winner_points_earned, 4)
+    winner_points_earned = round(winner_points_earned, 3)
 
     loser_points_lost = parseFormmula.evaluateFormula(configFile[POINTS_LOST_FORMULA_KEY], tier_difference,
                                                       point_difference, placement_difference)
     loser_points_lost = max(loser_points_lost, configFile[MIN_POINTS_LOST_KEY])
     loser_points_lost = min(loser_points_lost, configFile[MAX_POINTS_LOST_KEY])
-    loser_points_lost = round(loser_points_lost, 4)
+    loser_points_lost = round(loser_points_lost, 3)
 
     winner_info[POINTS_KEY] += winner_points_earned
     loser_info[POINTS_KEY] -= loser_points_lost
@@ -458,10 +476,6 @@ def matchResultPoints(winner_id, loser_id, guild_id):
     player_data_collection.find_one_and_replace({ID_KEY: winner_id}, winner_info, upsert=True)
     player_data_collection.find_one_and_replace({ID_KEY: loser_id}, loser_info, upsert=True)
 
-    new_winner_tier, new_winner_tier_index = getCurrentTier(winner_info[POINTS_KEY], guild_id)
-    new_loser_tier, new_loser_tier_index = getCurrentTier(loser_info[POINTS_KEY], guild_id)
-
-    print(new_winner_tier, new_loser_tier)
     return winner_points_earned, loser_points_lost
 
 
@@ -485,7 +499,7 @@ async def on_raw_reaction_add(payload):
             winner_name = winner.name
             loser_name = loser.name
 
-            winner_points, loser_points= matchResultPoints(
+            winner_points, loser_points = await matchResultPoints(
                 messageInfo[WINNER_ID_KEY], messageInfo[LOSER_ID_KEY],
                 payload.guild_id)
 
