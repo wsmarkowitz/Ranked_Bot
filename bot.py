@@ -317,7 +317,7 @@ async def removeTier(ctx, roleName: str):
 async def viewTiers(ctx):
     sortedTiers = list(reversed(getSortedTiers(ctx.guild.id)))
     if len(sortedTiers) == 0:
-        embed = formatErrorMessage("There are currently no tiers!", ctx.guild.icon_url)
+        embed = formatSuccessMessage("There are currently no tiers!", ctx.guild.icon_url)
         await ctx.send(embed=embed)
         return
 
@@ -342,7 +342,7 @@ async def displayLeaderboard(ctx, tier=None):
     data = list(collection.find({}))
 
     if not data:
-        embed = formatErrorMessage("There are current no players on the leaderboard!", ctx.guild.icon_url)
+        embed = formatSuccessMessage("There are currently no players on the leaderboard!", ctx.guild.icon_url)
         await ctx.send(embed=embed)
         return
 
@@ -430,6 +430,13 @@ async def adjustPoints(ctx, mention: str, points: int):
 
     collection = db[PLAYER_DATA_COLLECTION]
     player_info = collection.find_one({ID_KEY: playerId})
+    print(player_info)
+    if not player_info:
+        player_info = {
+            ID_KEY: playerId,
+            POINTS_KEY: 0
+        }
+    print("success")
     old_points = player_info[POINTS_KEY]
     new_points = old_points + points
     collection.find_one_and_update({ID_KEY: playerId}, {"$inc": {POINTS_KEY: points}}, upsert=True)
@@ -452,6 +459,11 @@ async def adjustPoints(ctx, mention: str, points: int):
              aliases=["UpdateMemberTiers"],
              help="This updates the tiers for all players. Should primarily be used after updating the thresholds for tiers.")
 async def updateRoles(ctx):
+    if not userHasAdminRole(ctx.message.author):
+        embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
     db = cluster[str(ctx.guild.id)]
     player_data_collection = db[PLAYER_DATA_COLLECTION]
     data = list(player_data_collection.find({}))
@@ -464,7 +476,7 @@ async def updateRoles(ctx):
         roles.append(discord.utils.get(guild.roles, name=role_string))
 
     if len(roles) == 0:
-        embed = formatErrorMessage("There are no currently set tiers.", ctx.guild.icon_url)
+        embed = formatSuccessMessage("There are no currently set tiers.", ctx.guild.icon_url)
         await ctx.send(embed=embed)
         return
 
@@ -515,7 +527,6 @@ async def matchResultPoints(winner_id, loser_id, guild_id):
     else:
         loser_info = loser_info[0]
 
-    isUpset = loser_info[POINTS_KEY] > winner_info[POINTS_KEY]
     points_for_members_in_server = []
     for entry in data:
         member = await try_fetch_member(entry[ID_KEY], bot.get_guild(guild_id))
