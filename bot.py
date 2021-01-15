@@ -148,6 +148,32 @@ async def changeCommandPrefix(ctx, command_prefix: str):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="viewPointsFormulas",
+              help="Lets you see what the formulas are for when someone wins or loses a match.",
+              usage="viewPointsFormulas")
+async def viewPointsFormulas(ctx):
+    db = cluster[str(ctx.guild.id)]
+    collection = db[CONFIG_COLLECTION]
+    config = collection.find_one({})
+    pointsGainedFomula = config[POINTS_GAINED_FORMULA_KEY]
+    pointsLostFomula = config[POINTS_LOST_FORMULA_KEY]
+    minPointsGained = config[MIN_POINTS_GAINED_KEY]
+    maxPointsGained = config[MAX_POINTS_GAINED_KEY]
+    minPointsLost = config[MIN_POINTS_LOST_KEY]
+    maxPointsLost = config[MAX_POINTS_LOST_KEY]
+    message = f"```POINTS_GAINED: {pointsGainedFomula}"
+    message += f"\nMIN_POINTS_GAINED: {minPointsGained}" if minPointsGained is not None else ""
+    message += f"\nMAX_POINTS_GAINED: {maxPointsGained}" if maxPointsGained is not None else ""
+
+    message += f"\nPOINTS_LOST: {pointsLostFomula}"
+    message += f"\nMIN_POINTS_LOST: {minPointsLost}" if minPointsLost is not None else ""
+    message += f"\nMAX_POINTS_LOST: {maxPointsLost}" if maxPointsLost is not None else ""
+    message += "```"
+
+    embed = formatSuccessMessage(message, ctx.guild.icon_url, title="View Formulas")
+    await ctx.send(embed=embed)
+
+
 @bot.command(name="pointsGained",
              help="Set the formula for when you gain points for a win. Any singular mathematical expression will "
                   "suffice. The supported symbols are '+', '-', '*', '/', '(', ')', 'TIER_DIFFERENCE' and "
@@ -156,7 +182,7 @@ async def changeCommandPrefix(ctx, command_prefix: str):
                   "how many more points the winner has over the loser. An example formula would be `5 + ( -1 * POINT_DIFFERENCE / 8 )`.",
              usage='pointsGained "formula" minPointsGained (optional) maxPointsGained (optional)'
              )
-async def pointsGainedFomula(ctx, formula: str, minRange=None, maxRange=None):
+async def changePointsGainedFomula(ctx, formula: str, minRange=None, maxRange=None):
     db = cluster[str(ctx.guild.id)]
     if not userHasAdminRole(ctx.message.author):
         embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
@@ -206,7 +232,7 @@ async def pointsGainedFomula(ctx, formula: str, minRange=None, maxRange=None):
                   "\n \n This should be a positive number, as this number will be subtracted from the loser's point total.",
              usage='pointsLost "formula" minPointsLost (optional) maxPointsLost (optional)'
              )
-async def pointsLostFomula(ctx, formula: str, minRange=None, maxRange=None):
+async def changePointsLostFomula(ctx, formula: str, minRange=None, maxRange=None):
     db = cluster[str(ctx.guild.id)]
     if not userHasAdminRole(ctx.message.author):
         embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
@@ -362,6 +388,11 @@ async def displayLeaderboard(ctx, tier=None):
     message = "```"
     rank = 0
     leaderboard.sort(key=getPoints, reverse=True)
+
+    if len(leaderboard) == 0:
+        embed = formatSuccessMessage("There are currently no players in this tier!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
 
     for person in leaderboard:
         rank += 1
