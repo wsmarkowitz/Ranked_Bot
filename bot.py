@@ -2,10 +2,10 @@ import os
 
 from pymongo import MongoClient
 
-import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 from util import *
+from messageFormatting import *
 
 import parseFormmula
 
@@ -17,6 +17,14 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 def get_command_prefix(_, message):
     db = cluster[str(message.guild.id)]
+    collection = db[CONFIG_COLLECTION]
+    configFile = collection.find_one({})
+    command_prefix = configFile[COMMAND_PREFIX_KEY]
+    return command_prefix
+
+
+def get_command_prefix_from_id(guild_id):
+    db = cluster[str(guild_id)]
     collection = db[CONFIG_COLLECTION]
     configFile = collection.find_one({})
     command_prefix = configFile[COMMAND_PREFIX_KEY]
@@ -48,6 +56,12 @@ def getSortedTiers(guild_id):
     sortedTiers.sort(key=getPoints, reverse=False)
     return list(sortedTiers)
 
+
+def tierIsValid(tier, guild_id):
+    db = cluster[str(guild_id)]
+    collection = db[CONFIG_COLLECTION]
+    configFile = collection.find_one({})
+    return tier in configFile[TIERS_KEY].keys()
 
 def getCurrentTier(member_points, guild_id):
     sortedTiers = getSortedTiers(guild_id)
@@ -81,9 +95,17 @@ async def adjustMemberTierRole(member_id, guild_id):
 
     for role_string, _ in sortedTiers:
         if role_string != correct_role_string:
-            await member.remove_roles(discord.utils.get(guild.roles, name=role_string))
+            try:
+                await member.remove_roles(discord.utils.get(guild.roles, name=role_string))
+            except discord.Forbidden:
+                raise PermissionError("The bot does not have permission to remove roles. Ensure that the bot permissions are higher than all roles associated with ranked tiers.")
+                return
     if correct_role_string:
-        await member.add_roles(discord.utils.get(guild.roles, name=correct_role_string))
+        try:
+            await member.add_roles(discord.utils.get(guild.roles, name=correct_role_string))
+        except discord.Forbidden:
+            raise PermissionError(
+                "The bot does not have permission to add roles. Ensure that the bot permissions are higher than all roles associated with ranked tiers.")
 
 
 async def try_fetch_member(member_id, guild):
@@ -116,35 +138,46 @@ async def on_ready():
 async def changeCommandPrefix(ctx, command_prefix: str):
     db = cluster[str(ctx.guild.id)]
     if not userHasAdminRole(ctx.message.author):
-        await ctx.send("You are not an admin for the ranked bot!")
+        embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
 
     collection = db[CONFIG_COLLECTION]
     collection.update_one({}, {"$set": {COMMAND_PREFIX_KEY: command_prefix}})
-    message = f"The command prefix has been set to `{command_prefix}`!"
-    await ctx.send(message)
+    embed = formatSuccessMessage(f"The command prefix has been set to `{command_prefix}`!", ctx.guild.icon_url)
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="pointsGained",
              help="Set the formula for when you gain points for a win. Any singular mathematical expression will "
-                  "suffice. The supported symbols are '+', '-', '*', '/', '(', ')', 'TIER_DIFFERENCE', "
-                  "'POINT_DIFFERENCE', and 'PLACEMENT_DIFFERENCE'. Be sure to use a space between every symbol. "
+                  "suffice. The supported symbols are '+', '-', '*', '/', '(', ')', 'TIER_DIFFERENCE' and "
+                  "'POINT_DIFFERENCE'. Be sure to use a space between every symbol. "
                   "TIER_DIFFERENCE indicates how many tiers the winner is above the loser. POINT_DIFFERENCE indicates "
-                  "how many more points the winner has over the loser. PLACEMENT_DIFFERENCE indicates how many places "
-                  "the winner is above the loser on the leaderboard. An example formula would be `5 + ( -1 * POINT_DIFFERENCE / 8 )`.",
+                  "how many more points the winner has over the loser. An example formula would be `5 + ( -1 * POINT_DIFFERENCE / 8 )`.",
              usage='pointsGained "formula" minPointsGained (optional) maxPointsGained (optional)'
              )
 async def pointsGainedFomula(ctx, formula: str, minRange=None, maxRange=None):
     db = cluster[str(ctx.guild.id)]
     if not userHasAdminRole(ctx.message.author):
-        await ctx.send("You are not an admin for the ranked bot!")
+        embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
 
     try:
-        parseFormmula.evaluateFormula(formula, 0, 0, 0)
+        parseFormmula.evaluateFormula(formula, 0, 0)
     except SyntaxError as e:
-        await ctx.send(e)
+        embed = formatErrorMessage(str(e), ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
+
+    if minRange and maxRange:
+        if maxRange <= minRange:
+            embed = formatErrorMessage("The minimum points value must be less than the maximum points value", ctx.guild.icon_url)
+            await ctx.send(embed=embed)
+            return
+
+    minRange = int(minRange) if minRange and minRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
+    maxRange = int(maxRange) if maxRange and maxRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
 
     collection = db[CONFIG_COLLECTION]
 
@@ -152,40 +185,49 @@ async def pointsGainedFomula(ctx, formula: str, minRange=None, maxRange=None):
     message = f"The pointsGained info has been changed: ```Formula: {formula}"
 
     if minRange:
-        minPoints = float(minRange) if minRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
-        collection.update_one({}, {"$set": {MIN_POINTS_GAINED_KEY: minPoints}})
-        message += "\nMinimum Points " + str(minPoints)
+        collection.update_one({}, {"$set": {MIN_POINTS_GAINED_KEY: minRange}})
+        message += "\nMinimum Points " + str(minRange)
 
     if maxRange:
-        maxPoints = float(maxRange) if maxRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
-        collection.update_one({}, {"$set": {MAX_POINTS_GAINED_KEY: maxPoints}})
-        message += "\nMaximum Points " + str(maxPoints)
+        collection.update_one({}, {"$set": {MAX_POINTS_GAINED_KEY: maxRange}})
+        message += "\nMaximum Points " + str(maxRange)
 
     message += "```"
-    await ctx.send(message)
+    embed = formatSuccessMessage(message, ctx.guild.icon_url, title="Points Gained Formula")
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="pointsLost",
              help="Set the formula for when you gain points for a win. Any singular mathematical expression will "
-                  "suffice. The supported symbols are '+', '-', '*', '/', '(', ')', 'TIER_DIFFERENCE', "
-                  "'POINT_DIFFERENCE', and 'PLACEMENT_DIFFERENCE'. Be sure to use a space between every symbol. "
+                  "suffice. The supported symbols are '+', '-', '*', '/', '(', ')', 'TIER_DIFFERENCE', and "
+                  "'POINT_DIFFERENCE'. Be sure to use a space between every symbol. "
                   "TIER_DIFFERENCE indicates how many tiers the winner is above the loser. POINT_DIFFERENCE indicates "
-                  "how many more points the winner has over the loser. PLACEMENT_DIFFERENCE indicates how many places "
-                  "the winner is above the loser on the leaderboard. An example formula would be `5 + ( -1 * POINT_DIFFERENCE / 8 )`. "
+                  "how many more points the winner has over the loser. An example formula would be `5 + ( -1 * POINT_DIFFERENCE / 8 )`. "
                   "\n \n This should be a positive number, as this number will be subtracted from the loser's point total.",
              usage='pointsLost "formula" minPointsLost (optional) maxPointsLost (optional)'
              )
 async def pointsLostFomula(ctx, formula: str, minRange=None, maxRange=None):
     db = cluster[str(ctx.guild.id)]
     if not userHasAdminRole(ctx.message.author):
-        await ctx.send("You are not an admin for the ranked bot!")
+        embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
 
     try:
-        parseFormmula.evaluateFormula(formula, 0, 0, 0)
+        parseFormmula.evaluateFormula(formula, 0, 0)
     except SyntaxError as e:
-        await ctx.send(e)
+        embed = formatErrorMessage(str(e), ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
+
+    minRange = int(minRange) if minRange and minRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
+    maxRange = int(maxRange) if maxRange and maxRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
+
+    if minRange and maxRange:
+        if maxRange <= minRange:
+            embed = formatErrorMessage("The minimum points value must be less than the maximum points value", ctx.guild.icon_url)
+            await ctx.send(embed=embed)
+            return
 
     collection = db[CONFIG_COLLECTION]
 
@@ -193,17 +235,16 @@ async def pointsLostFomula(ctx, formula: str, minRange=None, maxRange=None):
     message = f"The pointsLost info has been changed: ```Formula: {formula}"
 
     if minRange:
-        minPoints = float(minRange) if minRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
-        collection.update_one({}, {"$set": {MIN_POINTS_LOST_KEY: minPoints}})
-        message += "\nMinimum Points " + str(minPoints)
+        collection.update_one({}, {"$set": {MIN_POINTS_LOST_KEY: minRange}})
+        message += "\nMinimum Points " + str(minRange)
 
     if maxRange:
-        maxPoints = float(maxRange) if maxRange.replace('.', '', 1).replace('-', '', 1).isdigit() else None
-        collection.update_one({}, {"$set": {MAX_POINTS_LOST_KEY: maxPoints}})
-        message += "\nMaximum Points " + str(maxPoints)
+        collection.update_one({}, {"$set": {MAX_POINTS_LOST_KEY: maxRange}})
+        message += "\nMaximum Points " + str(maxRange)
 
     message += "```"
-    await ctx.send(message)
+    embed = formatSuccessMessage(message, ctx.guild.icon_url, title="Points Lost Formula")
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="setTier",
@@ -211,14 +252,16 @@ async def pointsLostFomula(ctx, formula: str, minRange=None, maxRange=None):
              help="Be sure the role name already is an existing role before using this command. "
                   "Also note that the number of points is the lower bound for reaching this tier/rank.",
              aliases=["settier", "SetTier", "Settier"])
-async def setTier(ctx, roleName: str, points: float):
+async def setTier(ctx, roleName: str, points: int):
     db = cluster[str(ctx.guild.id)]
     if not userHasAdminRole(ctx.message.author):
-        await ctx.send("You are not an admin for the ranked bot!")
+        embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
 
     if not [True for role in ctx.guild.roles if role.name == roleName]:
-        await ctx.send("That is not a valid role on this server! Remember that this is case sensitive!")
+        embed = formatErrorMessage("That is not a valid role on this server! Remember that this is case sensitive!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
 
     collection = db[CONFIG_COLLECTION]
@@ -230,8 +273,8 @@ async def setTier(ctx, roleName: str, points: float):
 
     tiers[roleName] = points
     collection.update_one({}, {"$set": {TIERS_KEY: tiers}})
-    message = f"The tier *{roleName}* now requires at least *{points}* points."
-    await ctx.send(message)
+    embed = formatSuccessMessage(f"The tier *{roleName}* now requires at least *{points}* points.", ctx.guild.icon_url, "Set Tier")
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="removeTier",
@@ -241,26 +284,30 @@ async def setTier(ctx, roleName: str, points: float):
 async def removeTier(ctx, roleName: str):
     db = cluster[str(ctx.guild.id)]
     if not userHasAdminRole(ctx.message.author):
-        await ctx.send("You are not an admin for the ranked bot!")
+        embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
+
 
     collection = db[CONFIG_COLLECTION]
     configFile = collection.find_one({})
     if not configFile[TIERS_KEY]:
-        await ctx.send("That is not a role already set! Remember that this is case sensitive!")
+        embed = formatErrorMessage("That is not a tier already set! Remember that this is case sensitive!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
     keys = list(configFile[TIERS_KEY].keys())
     indices = range(len(keys))
     matchingIndices = [index for index in indices if keys[index] == roleName]
     if len(matchingIndices) == 0:
-        await ctx.send("That is not a role already set! Remember that this is case sensitive!")
+        embed = formatErrorMessage("That is not a tier already set! Remember that this is case sensitive!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
 
     matchingIndex = matchingIndices[0]
     del configFile[TIERS_KEY][keys[matchingIndex]]
     collection.update_one({}, {"$set": {TIERS_KEY: configFile[TIERS_KEY]}})
-    message = f"The tier *{roleName}* has been removed."
-    await ctx.send(message)
+    embed = formatSuccessMessage(f"The tier *{roleName}* has been removed.", ctx.guild.icon_url, "Remove Tiers")
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="viewTiers",
@@ -268,37 +315,49 @@ async def removeTier(ctx, roleName: str):
              help="Displays the tier names and their minimum point values.",
              aliases=["viewtiers", "ViewTiers", "Viewtiers"])
 async def viewTiers(ctx):
-    sortedTiers = getSortedTiers(ctx.guild.id)
+    sortedTiers = list(reversed(getSortedTiers(ctx.guild.id)))
     if len(sortedTiers) == 0:
-        ctx.send("There are currently no tiers!")
+        embed = formatErrorMessage("There are currently no tiers!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
 
-    message = "```TIER LISTING\n"
+    message = "```"
 
     for tier in sortedTiers:
         message += "\n" + tier[0] + ": " + str(tier[1])
 
     message += "```"
-    await ctx.send(message)
+    embed = formatSuccessMessage(message, ctx.guild.icon_url, title="Tiers List")
+    await ctx.send(embed=embed)
 
 
 @bot.command(name='leaderboard',
-             help="Displays the ranked leaderboard for this server.",
+             help="Displays the ranked leaderboard for this server. You may also add an argument that is a tier if you would like to see te rankings for only that tier.",
+             usage="leaderboard tier (optional)",
              aliases=["Leaderboard", "LeaderBoard", "leaderBoard"])
-async def displayLeaderboard(ctx):
+async def displayLeaderboard(ctx, tier=None):
     leaderboard = []
-
     db = cluster[str(ctx.guild.id)]
     collection = db[PLAYER_DATA_COLLECTION]
     data = list(collection.find({}))
 
     if not data:
-        await ctx.send("There are current no players on the leaderboard!")
+        embed = formatErrorMessage("There are current no players on the leaderboard!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    if tier and not tierIsValid(tier, ctx.guild.id):
+        embed = formatErrorMessage("There is no such tier currently set! Remember that this is case-sensitive.", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
 
     for entry in data:
         user = await try_fetch_member(int(entry[ID_KEY]), ctx.guild)
         if user is not None:
-            leaderboard.append([user.display_name, entry[POINTS_KEY]])
+            for role in user.roles:
+                if not tier or tier == role.name:
+                    leaderboard.append([user.display_name, entry[POINTS_KEY]])
+                    break
 
     message = "```"
     rank = 0
@@ -309,7 +368,9 @@ async def displayLeaderboard(ctx):
         message += "\n" + str(rank) + ". " + person[0] + " (" + str(person[1]) + ")"
 
     message += "```"
-    await ctx.send(message)
+    title = f"{tier if tier else 'Full'} Leaderboard"
+    embed = formatSuccessMessage(message, ctx.guild.icon_url, title=title)
+    await ctx.send(embed=embed)
 
 
 @bot.command(name='report',
@@ -321,14 +382,24 @@ async def displayLeaderboard(ctx):
 async def reportResult(ctx, winnerMention: str, loserMention: str):
     winner_id = str(getIDFromMention(winnerMention))
     loser_id = str(getIDFromMention(loserMention))
-
     guild = ctx.guild
-    winnerTag = await guild.fetch_member(int(winner_id))
-    loserTag = await guild.fetch_member(int(loser_id))
 
-    message = f"{winnerTag} has beaten {loserTag}. React to this message if that is correct."
+    if not (winner_id.isnumeric() or loser_id.isnumeric()):
+        embed = formatErrorMessage("User not found. Be sure that you're correctly tagging the players.\n\nIf this issue persists, there is likely an issue with the bot's permissions or with Discord.", guild.icon_url)
+        await ctx.send(embed=embed)
+        return
 
-    sent_message = await ctx.send(message)
+    winnerTag = await try_fetch_member(int(winner_id), guild)
+    loserTag = await try_fetch_member(int(loser_id), guild)
+
+    if not (winnerTag and loserTag):
+        embed = formatErrorMessage("User not found. Be sure that you're correctly tagging the players.\n\nIf this issue persists, there is likely an issue with the bot's permissions or with Discord.", guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    embed = formatSuccessMessage(f"{winnerMention} has beaten {loserMention}. React to this message if that is correct.", guild.icon_url)
+
+    sent_message = await ctx.send(embed=embed)
     db = cluster[str(ctx.guild.id)]
     collection = db[PENDING_RESULTS_COLLECTION]
 
@@ -349,27 +420,31 @@ async def reportResult(ctx, winnerMention: str, loserMention: str):
                   "can report scores. Only usable by server admins.",
              usage="adjust <@Member> <PointChange>",
              aliases=["Adjust", "adjustPoints", "AdjustPoints", "adjustpoints"])
-async def adjustPoints(ctx, mention: str, points: float):
+async def adjustPoints(ctx, mention: str, points: int):
     playerId = getIDFromMention(mention)
     db = cluster[str(ctx.guild.id)]
     if not userHasAdminRole(ctx.message.author):
-        await ctx.send("You are not a score reporter for the ranked bot!")
+        embed = formatErrorMessage("You are not a score reporter for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
 
     collection = db[PLAYER_DATA_COLLECTION]
+    player_info = collection.find_one({ID_KEY: playerId})
+    old_points = player_info[POINTS_KEY]
+    new_points = old_points + points
     collection.find_one_and_update({ID_KEY: playerId}, {"$inc": {POINTS_KEY: points}}, upsert=True)
-    config_collection = db[CONFIG_COLLECTION]
 
-    pointWord = "point" if abs(points) == 1 else "points"
     member = await ctx.guild.fetch_member(int(playerId))
     name = member.display_name
-    message = f"{name} has earned {points} {pointWord}!" if points > 0 else f"{name} has lost {-points} {pointWord}."
 
-    await adjustMemberTierRole(playerId, ctx.guild.id)
-    await ctx.send(message)
+    try:
+        await adjustMemberTierRole(playerId, ctx.guild.id)
+    except PermissionError as e:
+        embed = formatErrorMessage(str(e), ctx.guild.icon_url)
+        await ctx.send(embed=embed)
 
-
-
+    embed = formatAdjustPointsMessage(name, old_points, new_points, ctx.guild.icon_url)
+    await ctx.send(embed=embed)
 
 
 @bot.command(name='updateMemberTiers',
@@ -389,7 +464,8 @@ async def updateRoles(ctx):
         roles.append(discord.utils.get(guild.roles, name=role_string))
 
     if len(roles) == 0:
-        await ctx.send("There are no currently set tiers.")
+        embed = formatErrorMessage("There are no currently set tiers.", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
         return
 
     for player in data:
@@ -399,19 +475,24 @@ async def updateRoles(ctx):
             continue
 
         for role in roles:
-            await member.remove_roles(role)
+            try:
+                await member.remove_roles(role)
+            except discord.Forbidden:
+                embed = formatErrorMessage("The bot does not have permission to remove roles. Ensure that the bot permissions are higher than all roles associated with ranked tiers.", ctx.guild.icon_url)
+                ctx.send(embed=embed)
+                return
         _, tier_index = getCurrentTier(points, guild.id)
 
         if tier_index == NO_TIER_ROLE_INDEX:
             continue
         await member.add_roles(roles[tier_index])
 
-    await ctx.send("Player roles have been updated")
+    embed = formatSuccessMessage("Player roles have been updated", ctx.guild.icon_url)
+    await ctx.send(embed=embed)
+    return
 
 
 async def matchResultPoints(winner_id, loser_id, guild_id):
-    placement_difference = 0
-
     db = cluster[str(guild_id)]
     player_data_collection = db[PLAYER_DATA_COLLECTION]
     data = list(player_data_collection.find({}))
@@ -435,16 +516,11 @@ async def matchResultPoints(winner_id, loser_id, guild_id):
         loser_info = loser_info[0]
 
     isUpset = loser_info[POINTS_KEY] > winner_info[POINTS_KEY]
-    maxPoints = loser_info[POINTS_KEY] if isUpset else winner_info[POINTS_KEY]
-    minPoints = winner_info[POINTS_KEY] if isUpset else loser_info[POINTS_KEY]
     points_for_members_in_server = []
     for entry in data:
         member = await try_fetch_member(entry[ID_KEY], bot.get_guild(guild_id))
         if member:
             points_for_members_in_server.append(entry[POINTS_KEY])
-    if minPoints != maxPoints:
-        placement_difference = sum(map(lambda points: minPoints < points < maxPoints, points_for_members_in_server)) + 1
-        placement_difference = -1 * placement_difference if isUpset else placement_difference
 
     config_collection = db[CONFIG_COLLECTION]
     configFile = config_collection.find_one({})
@@ -459,24 +535,28 @@ async def matchResultPoints(winner_id, loser_id, guild_id):
 
     point_difference = winner_info[POINTS_KEY] - loser_info[POINTS_KEY]
     winner_points_earned = parseFormmula.evaluateFormula(configFile[POINTS_GAINED_FORMULA_KEY], tier_difference,
-                                                         point_difference, placement_difference)
+                                                         point_difference)
     winner_points_earned = max(winner_points_earned, configFile[MIN_POINTS_GAINED_KEY])
     winner_points_earned = min(winner_points_earned, configFile[MAX_POINTS_GAINED_KEY])
-    winner_points_earned = round(winner_points_earned, 3)
 
     loser_points_lost = parseFormmula.evaluateFormula(configFile[POINTS_LOST_FORMULA_KEY], tier_difference,
-                                                      point_difference, placement_difference)
+                                                      point_difference)
     loser_points_lost = max(loser_points_lost, configFile[MIN_POINTS_LOST_KEY])
     loser_points_lost = min(loser_points_lost, configFile[MAX_POINTS_LOST_KEY])
-    loser_points_lost = round(loser_points_lost, 3)
+
+    old_winner_points = winner_info[POINTS_KEY]
+    old_loser_points = loser_info[POINTS_KEY]
 
     winner_info[POINTS_KEY] += winner_points_earned
     loser_info[POINTS_KEY] -= loser_points_lost
 
+    new_winner_points = winner_info[POINTS_KEY]
+    new_loser_points = loser_info[POINTS_KEY]
+
     player_data_collection.find_one_and_replace({ID_KEY: winner_id}, winner_info, upsert=True)
     player_data_collection.find_one_and_replace({ID_KEY: loser_id}, loser_info, upsert=True)
 
-    return winner_points_earned, loser_points_lost
+    return old_winner_points, new_winner_points, old_loser_points, new_loser_points
 
 
 @bot.event
@@ -499,15 +579,19 @@ async def on_raw_reaction_add(payload):
             winner_name = winner.name
             loser_name = loser.name
 
-            winner_points, loser_points = await matchResultPoints(
+            old_winner_points, new_winner_points, old_loser_points, new_loser_points = await matchResultPoints(
                 messageInfo[WINNER_ID_KEY], messageInfo[LOSER_ID_KEY],
                 payload.guild_id)
+            try:
+                await adjustMemberTierRole(messageInfo[WINNER_ID_KEY], payload.guild_id)
+                await adjustMemberTierRole(messageInfo[LOSER_ID_KEY], payload.guild_id)
+            except PermissionError as e:
+                embed = formatErrorMessage(str(e), guild.icon_url)
+                await channel.send(embed=embed)
 
-            await adjustMemberTierRole(messageInfo[WINNER_ID_KEY], payload.guild_id)
-            await adjustMemberTierRole(messageInfo[LOSER_ID_KEY], payload.guild_id)
             collection.delete_one({ID_KEY: payload.message_id})
-            confirmMessage = f"The result has been confirmed! {winner_name} has earned {winner_points} points while {loser_name} has lost {loser_points} points."
-            await channel.send(confirmMessage)
+            embed = formatResultsConfirmedMessage(winner_name, old_winner_points, new_winner_points, loser_name, old_loser_points, new_loser_points, guild.icon_url)
+            await channel.send(embed=embed)
 
 
 @bot.event
@@ -520,10 +604,28 @@ async def on_guild_join(guild):
 # TODO: Get some more error testing in, but this can likely be done after ppl use it and see how it goes
 @bot.event
 async def on_command_error(ctx, error):
+    command_prefix = get_command_prefix_from_id(ctx.guild.id)
     if isinstance(error, commands.errors.MissingRequiredArgument):
-        message = f"Be sure you use all required arguments! \nThe correct usage is: `{ctx.bot.command_prefix}" \
+        error_message = f"Be sure you use all required arguments! \nThe correct usage is: `{command_prefix}" \
                   f"{ctx.command.usage}` "
-        await ctx.send(message)
+    elif isinstance(error, commands.errors.BadArgument):
+        error_message = f"Doublecheck all the required arguments! Remember that all points values must be integers. \nThe correct usage is: `{command_prefix}" \
+                  f"{ctx.command.usage}` "
+    elif isinstance(error, commands.errors.CommandNotFound):
+        error_message = f"This isn't a command! Be sure to use {command_prefix}help if you're unsure about what commands we have available!"
+    elif isinstance(error, commands.errors.CommandInvokeError):
+        error_message = f"An error has occurred while running the command. \n" \
+                        f"```{error}```\n" \
+                        f"If this issue persists, this may be a bug. Let Fermata#0765 know so that we can resolve the issue ASAP."
+    elif isinstance(error, commands.errors.ExpectedClosingQuoteError):
+        error_message = "An error has occurred. Not all quotation marks are closed."
+    elif isinstance(error, commands.errors.InvalidEndOfQuotedStringError):
+        error_message = "An error has occurred. Be sure to include a space after every ending quote."
+    else:
+        error_message = f"An unknown error has occurred. Please message Fermata#0765 with the following error if you'd like to submit a report.```\n{type(error)}\n{error}```"
+
+    embed = formatErrorMessage(error_message, ctx.guild.icon_url)
+    await ctx.send(embed=embed)
 
 
 bot.run(TOKEN)
