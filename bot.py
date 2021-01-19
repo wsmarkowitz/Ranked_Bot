@@ -109,8 +109,14 @@ async def adjustMemberTierRole(member_id, guild_id):
 
 
 async def try_fetch_member(member_id, guild):
+    user = guild.get_member(member_id)
+    print(user)
+    if user:
+        print("gotten")
+        return user
     try:
         user = await guild.fetch_member(member_id)
+        print("fetched")
         return user
     except discord.HTTPException as e:
         print("Error retrieving members")
