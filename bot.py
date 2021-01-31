@@ -546,7 +546,7 @@ async def updateRoles(ctx):
 @bot.command(name="addCharacterRoles",
              usage=f"game\n"
                    f"The currently supported games are {gamesSupported}",
-             aliases=["AddCharacterRoles"],
+             aliases=["AddCharacterRoles", "createCharacterRoles", "CreateCharacterRoles"],
              help="This adds the character roles for a given game. For your convenience, it is imperative that you do not change the names of these roles and that you ensure that the role for this bot is above these roles.")
 async def addCharacterRoles(ctx, game: str):
     if not userHasAdminRole(ctx.message.author):
@@ -561,16 +561,19 @@ async def addCharacterRoles(ctx, game: str):
 
     characterList = gameToCharacterList[game]
     guild = ctx.guild
-    for character in characterList:
-        print(character)
+    await ctx.send("Adding Roles...")
+    for characterString in characterList:
+        print(characterString)
         # await guild.create_role(name=character)
-        role = discord.utils.get(guild.roles, name=character)
+        role = discord.utils.get(guild.roles, name=characterString)
         if role is not None:
             continue
         try:
-            await guild.create_role(name=character)
+            await guild.create_role(name=characterString)
         except discord.Forbidden:
-            await ctx.send('This bot does not have permission to Manage Roles. Please change this before trying again.')
+            embed = formatErrorMessage("This bot does not have permission to Manage Roles. Please change this before trying again.",
+                                       ctx.guild.icon_url)
+            await ctx.send(embed=embed)
             return
 
     embed = formatSuccessMessage("The character roles have been added!", ctx.guild.icon_url)
@@ -595,6 +598,7 @@ async def deleteCharacterRoles(ctx, game: str):
 
     characterList = gameToCharacterList[game]
     guild = ctx.guild
+    await ctx.send("Deleting Roles...")
     for character in characterList:
         role = discord.utils.get(guild.roles, name=character)
         if role is None:
@@ -621,17 +625,17 @@ async def toggleCharacterRoleForPlayer(ctx, game: str, characterAlias: str):
         return
 
     characterList = gameToCharacterList[game]
-    character = gameToCharacterAliases[game][characterAlias.lower()]
-    if character in characterList:
+    characterString = gameToCharacterAliases[game][characterAlias.lower()]
+    if characterString in characterList:
         guild = ctx.guild
-        role = discord.utils.get(guild.roles, name=character)
+        role = discord.utils.get(guild.roles, name=characterString)
         member = ctx.message.author
         for member_role in member.roles:
             print(member_role)
-            if character == member_role.name:
+            if characterString == member_role.name:
                 try:
                     await member.remove_roles(role)
-                    embed = formatSuccessMessage(f"You no longer have the {character} role!", ctx.guild.icon_url)
+                    embed = formatSuccessMessage(f"You no longer have the {characterString} role!", ctx.guild.icon_url)
                     await ctx.send(embed=embed)
                     return
                 except discord.Forbidden:
@@ -650,7 +654,7 @@ async def toggleCharacterRoleForPlayer(ctx, game: str, characterAlias: str):
             ctx.send(embed=embed)
             return
 
-    embed = formatSuccessMessage(f"You now have the {character} role!", ctx.guild.icon_url)
+    embed = formatSuccessMessage(f"You now have the {characterString} role!", ctx.guild.icon_url)
     await ctx.send(embed=embed)
 
 
