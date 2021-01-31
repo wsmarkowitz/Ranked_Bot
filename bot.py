@@ -618,13 +618,22 @@ async def deleteCharacterRoles(ctx, game: str):
                    f"The currently supported games are {gamesSupported}",
              aliases=["Character"],
              help="This toggles whether or not the author has the listed role. The role will be added if they do not already have it. If they already have the role, it will be removed.")
-async def toggleCharacterRoleForPlayer(ctx, game: str, characterAlias: str):
+async def toggleCharacterRoleForPlayer(ctx, game: str, *characterAliasWords):
+    characterAlias = " ".join(characterAliasWords)
+    print(characterAlias)
     if game not in gamesSupported:
         embed = formatErrorMessage(f"This is not a supported game! The currently supported games are: {gamesSupported}", ctx.guild.icon_url)
         await ctx.send(embed=embed)
         return
 
     characterList = gameToCharacterList[game]
+    if characterAlias.lower() not in gameToCharacterAliases[game].keys():
+        embed = formatErrorMessage(
+            "That is not a valid character. use `ViewCharacterRoles <game>` to see the valid characters",
+            ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
     characterString = gameToCharacterAliases[game][characterAlias.lower()]
     if characterString in characterList:
         guild = ctx.guild
