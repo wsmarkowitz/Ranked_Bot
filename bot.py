@@ -6,6 +6,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from util import *
 from messageFormatting import *
+from gamesForCharacterLists import *
 
 import parseFormmula
 
@@ -62,6 +63,7 @@ def tierIsValid(tier, guild_id):
     collection = db[CONFIG_COLLECTION]
     configFile = collection.find_one({})
     return tier in configFile[TIERS_KEY].keys()
+
 
 def getCurrentTier(member_points, guild_id):
     sortedTiers = getSortedTiers(guild_id)
@@ -138,7 +140,7 @@ async def on_ready():
 
 @bot.command(name="changeCommandPrefix",
              help="This command changes the bot's command prefix. Only usable by server admins.",
-             usage="changeCommandPrefix newCommandPrefix",
+             usage="newCommandPrefix",
              aliases=["ChangeCommandPrefix", "changecommandprefix", "ChangeCommandprefix",
                       "changeCommandprefix", "ChangecommandPrefix, Changecommandprefix", "changecommandPrefix"])
 async def changeCommandPrefix(ctx, command_prefix: str):
@@ -156,7 +158,7 @@ async def changeCommandPrefix(ctx, command_prefix: str):
 
 @bot.command(name="viewPointsFormulas",
               help="Lets you see what the formulas are for when someone wins or loses a match.",
-              usage="viewPointsFormulas")
+              usage="")
 async def viewPointsFormulas(ctx):
     db = cluster[str(ctx.guild.id)]
     collection = db[CONFIG_COLLECTION]
@@ -186,7 +188,7 @@ async def viewPointsFormulas(ctx):
                   "'POINT_DIFFERENCE'. Be sure to use a space between every symbol. "
                   "TIER_DIFFERENCE indicates how many tiers the winner is above the loser. POINT_DIFFERENCE indicates "
                   "how many more points the winner has over the loser. An example formula would be `5 + ( -1 * POINT_DIFFERENCE / 8 )`.",
-             usage='pointsGained "formula" minPointsGained (optional) maxPointsGained (optional)'
+             usage='"formula" minPointsGained (optional) maxPointsGained (optional)'
              )
 async def changePointsGainedFomula(ctx, formula: str, minRange=None, maxRange=None):
     db = cluster[str(ctx.guild.id)]
@@ -236,7 +238,7 @@ async def changePointsGainedFomula(ctx, formula: str, minRange=None, maxRange=No
                   "TIER_DIFFERENCE indicates how many tiers the winner is above the loser. POINT_DIFFERENCE indicates "
                   "how many more points the winner has over the loser. An example formula would be `5 + ( -1 * POINT_DIFFERENCE / 8 )`. "
                   "\n \n This should be a positive number, as this number will be subtracted from the loser's point total.",
-             usage='pointsLost "formula" minPointsLost (optional) maxPointsLost (optional)'
+             usage='"formula" minPointsLost (optional) maxPointsLost (optional)'
              )
 async def changePointsLostFomula(ctx, formula: str, minRange=None, maxRange=None):
     db = cluster[str(ctx.guild.id)]
@@ -280,7 +282,7 @@ async def changePointsLostFomula(ctx, formula: str, minRange=None, maxRange=None
 
 
 @bot.command(name="setTier",
-             usage="setTier roleName points",
+             usage="roleName points",
              help="Be sure the role name already is an existing role before using this command. "
                   "Also note that the number of points is the lower bound for reaching this tier/rank.",
              aliases=["settier", "SetTier", "Settier"])
@@ -310,7 +312,7 @@ async def setTier(ctx, roleName: str, points: int):
 
 
 @bot.command(name="removeTier",
-             usage="removeTier roleName",
+             usage="roleName",
              help="Be sure the role name already is currently set before removing",
              aliases=["removetier", "RemoveTier", "Removetier"])
 async def removeTier(ctx, roleName: str):
@@ -343,7 +345,7 @@ async def removeTier(ctx, roleName: str):
 
 
 @bot.command(name="viewTiers",
-             usage="viewTiers",
+             usage="",
              help="Displays the tier names and their minimum point values.",
              aliases=["viewtiers", "ViewTiers", "Viewtiers"])
 async def viewTiers(ctx):
@@ -365,7 +367,7 @@ async def viewTiers(ctx):
 
 @bot.command(name='leaderboard',
              help="Displays the ranked leaderboard for this server. You may also add an argument that is a tier if you would like to see te rankings for only that tier.",
-             usage="leaderboard tier (optional)",
+             usage="tier (optional)",
              aliases=["Leaderboard", "LeaderBoard", "leaderBoard"])
 async def displayLeaderboard(ctx, tier=None):
     leaderboard = []
@@ -411,7 +413,7 @@ async def displayLeaderboard(ctx, tier=None):
 
 
 @bot.command(name='report',
-             usage="report @winner, @loser",
+             usage="@winner, @loser",
              help="Report the reuslts of a set with this. Be sure to tag the winner first and the loser second. "
                   "Afterward, the bot will post a message for the players to confirm, at which point, "
                   "the resulting points will be adjusted.",
@@ -455,7 +457,7 @@ async def reportResult(ctx, winnerMention: str, loserMention: str):
 @bot.command(name='adjust',
              help="Manually adjusts the score of the mentioned player. Can only be called by members with roles that "
                   "can report scores. Only usable by server admins.",
-             usage="adjust <@Member> <PointChange>",
+             usage="<@Member> <PointChange>",
              aliases=["Adjust", "adjustPoints", "AdjustPoints", "adjustpoints"])
 async def adjustPoints(ctx, mention: str, points: int):
     playerId = getIDFromMention(mention)
@@ -492,7 +494,7 @@ async def adjustPoints(ctx, mention: str, points: int):
 
 
 @bot.command(name='updateMemberTiers',
-             usage="updateMemberTiers",
+             usage="",
              aliases=["UpdateMemberTiers"],
              help="This updates the tiers for all players. Should primarily be used after updating the thresholds for tiers.")
 async def updateRoles(ctx):
@@ -539,6 +541,136 @@ async def updateRoles(ctx):
     embed = formatSuccessMessage("Player roles have been updated", ctx.guild.icon_url)
     await ctx.send(embed=embed)
     return
+
+
+@bot.command(name="addCharacterRoles",
+             usage=f"game\n"
+                   f"The currently supported games are {gamesSupported}",
+             aliases=["AddCharacterRoles"],
+             help="This adds the character roles for a given game. For your convenience, it is imperative that you do not change the names of these roles and that you ensure that the role for this bot is above these roles.")
+async def addCharacterRoles(ctx, game: str):
+    if not userHasAdminRole(ctx.message.author):
+        embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    if game not in gamesSupported:
+        embed = formatErrorMessage(f"This is not a supported game! The currently supported games are: {gamesSupported}", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    characterList = gameToCharacterList[game]
+    guild = ctx.guild
+    for character in characterList:
+        print(character)
+        # await guild.create_role(name=character)
+        role = discord.utils.get(guild.roles, name=character)
+        if role is not None:
+            continue
+        try:
+            await guild.create_role(name=character)
+        except discord.Forbidden:
+            await ctx.send('This bot does not have permission to Manage Roles. Please change this before trying again.')
+            return
+
+    embed = formatSuccessMessage("The character roles have been added!", ctx.guild.icon_url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="deleteCharacterRoles",
+             usage=f"game\n"
+                   f"The currently supported games are {gamesSupported}",
+             aliases=["DeleteCharacterRoles"],
+             help="This deletes the character roles for a given game.")
+async def deleteCharacterRoles(ctx, game: str):
+    if not userHasAdminRole(ctx.message.author):
+        embed = formatErrorMessage("You are not an admin for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    if game not in gamesSupported:
+        embed = formatErrorMessage(f"This is not a supported game! The currently supported games are: {gamesSupported}", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    characterList = gameToCharacterList[game]
+    guild = ctx.guild
+    for character in characterList:
+        role = discord.utils.get(guild.roles, name=character)
+        if role is None:
+            continue
+        try:
+            await role.delete()
+        except discord.Forbidden:
+            await ctx.send('This bot does not have permission to Manage Roles. Please change this before trying again.')
+            return
+
+    embed = formatSuccessMessage("The character roles have been removed!", ctx.guild.icon_url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="character",
+             usage=f"game character\n"
+                   f"The currently supported games are {gamesSupported}",
+             aliases=["Character"],
+             help="This toggles whether or not the author has the listed role. The role will be added if they do not already have it. If they already have the role, it will be removed.")
+async def toggleCharacterRoleForPlayer(ctx, game: str, characterAlias: str):
+    if game not in gamesSupported:
+        embed = formatErrorMessage(f"This is not a supported game! The currently supported games are: {gamesSupported}", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    characterList = gameToCharacterList[game]
+    character = gameToCharacterAliases[game][characterAlias.lower()]
+    if character in characterList:
+        guild = ctx.guild
+        role = discord.utils.get(guild.roles, name=character)
+        member = ctx.message.author
+        for member_role in member.roles:
+            print(member_role)
+            if character == member_role.name:
+                try:
+                    await member.remove_roles(role)
+                    embed = formatSuccessMessage(f"You no longer have the {character} role!", ctx.guild.icon_url)
+                    await ctx.send(embed=embed)
+                    return
+                except discord.Forbidden:
+                    embed = formatErrorMessage(
+                        "The bot does not have permission to remove roles. Ensure that the bot permissions are higher than all roles associated with ranked tiers.",
+                        ctx.guild.icon_url)
+                    ctx.send(embed=embed)
+                    return
+
+        try:
+            await member.add_roles(role)
+        except discord.Forbidden:
+            embed = formatErrorMessage(
+                "The bot does not have permission to add roles. Ensure that the bot permissions are higher than all roles associated with ranked tiers.",
+                ctx.guild.icon_url)
+            ctx.send(embed=embed)
+            return
+
+    embed = formatSuccessMessage(f"You now have the {character} role!", ctx.guild.icon_url)
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="viewCharacterRoles",
+             usage=f"game\n"
+                   f"The currently supported games are {gamesSupported}",
+             aliases=["ViewCharacterRoles"],
+             help="This displays the characters for a given game.")
+async def viewCharacterRoles(ctx, game: str):
+    if game not in gamesSupported:
+        embed = formatErrorMessage(f"This is not a supported game! The currently supported games are: {gamesSupported}", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    characterList = gameToCharacterList[game]
+    characterListString = "\n".join(characterList)
+    message = f"Character List for {game}:\n\n{characterListString}"
+
+    embed = formatSuccessMessage(message, ctx.guild.icon_url)
+    await ctx.send(embed=embed)
 
 
 async def matchResultPoints(winner_id, loser_id, guild_id):
