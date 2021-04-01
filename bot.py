@@ -386,6 +386,8 @@ async def displayLeaderboard(ctx, tier=None):
         return
 
     for entry in data:
+        if not entry[ID_KEY]:
+            continue
         user = await try_fetch_member(int(entry[ID_KEY]), ctx.guild)
         if user is not None:
             for role in user.roles:
