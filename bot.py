@@ -128,6 +128,8 @@ async def try_fetch_member(member_id, guild):
         print("Error retrieving members")
         print(e)
         return None
+    finally:
+        return None
 
 
 @bot.event
@@ -425,7 +427,7 @@ async def reportResult(ctx, winnerMention: str, loserMention: str):
     loser_id = str(getIDFromMention(loserMention))
     guild = ctx.guild
 
-    if not (winner_id.isnumeric() or loser_id.isnumeric()):
+    if not (winner_id.isnumeric() and loser_id.isnumeric()):
         embed = formatErrorMessage("User not found. Be sure that you're correctly tagging the players.\n\nIf this issue persists, there is likely an issue with the bot's permissions or with Discord.", guild.icon_url)
         await ctx.send(embed=embed)
         return
@@ -470,6 +472,15 @@ async def adjustPoints(ctx, mention: str, points: int):
         return
 
     collection = db[PLAYER_DATA_COLLECTION]
+
+    try:
+        member = await ctx.guild.fetch_member(int(playerId))
+        name = member.display_name
+    except (ValueError, Exception):
+        embed = formatErrorMessage("User not found. Be sure that you're correctly tagging the players.\n\nIf this issue persists, there is likely an issue with the bot's permissions or with Discord.", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
     player_info = collection.find_one({ID_KEY: playerId})
     print(player_info)
     if not player_info:
@@ -481,9 +492,6 @@ async def adjustPoints(ctx, mention: str, points: int):
     old_points = player_info[POINTS_KEY]
     new_points = old_points + points
     collection.find_one_and_update({ID_KEY: playerId}, {"$inc": {POINTS_KEY: points}}, upsert=True)
-
-    member = await ctx.guild.fetch_member(int(playerId))
-    name = member.display_name
 
     try:
         await adjustMemberTierRole(playerId, ctx.guild.id)
