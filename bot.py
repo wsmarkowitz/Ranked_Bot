@@ -1,3 +1,6 @@
+import asyncio
+from builtins import str, PermissionError
+
 import os
 
 from pymongo import MongoClient
@@ -551,6 +554,73 @@ async def updateRoles(ctx):
     embed = formatSuccessMessage("Player roles have been updated", ctx.guild.icon_url)
     await ctx.send(embed=embed)
     return
+
+
+@bot.command(name="removeMember",
+             usage="@member",
+             aliases=["RemoveMember", "removemember", "Removemember", "deleteMember", "DeleteMember", "deletemember", "Deletemember"],
+             help="This removes a member from the leaderboard."
+             )
+async def removeMember(ctx, mention: str):
+    playerId = getIDFromMention(mention)
+    db = cluster[str(ctx.guild.id)]
+    if not userHasAdminRole(ctx.message.author):
+        embed = formatErrorMessage("You are not a score reporter for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    collection = db[PLAYER_DATA_COLLECTION]
+
+    try:
+        member = await ctx.guild.fetch_member(int(playerId))
+        name = member.display_name
+    except (ValueError, Exception):
+        embed = formatErrorMessage("User not found. Be sure that you're correctly tagging the players.\n\nIf this issue persists, there is likely an issue with the bot's permissions or with Discord.", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    deleteResult = collection.delete_one({ID_KEY: playerId})
+    print(deleteResult)
+
+    message = f"{name} has been removed from the leaderboard."
+    embed = formatSuccessMessage(message, ctx.guild.icon_url, title="Removal Success")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="resetLeaderboard",
+             usage="",
+             aliases=["ResetLeaderboard", "resetleaderboard", "Resetleaderboard"],
+             help="This completely resets the leaderboard."
+             )
+async def resetLeaderboard(ctx):
+    if not userHasAdminRole(ctx.message.author):
+        embed = formatErrorMessage("You are not a score reporter for the ranked bot!", ctx.guild.icon_url)
+        await ctx.send(embed=embed)
+        return
+
+    embed = formatSuccessMessage(f"React to this message to confirm that the entire leaderboard should be reset.", ctx.guild.icon_url)
+
+    sent_message = await ctx.send(embed=embed)
+    await sent_message.add_reaction("✅")
+
+    def check(reactionData, userData):
+        return userData == ctx.message.author and str(reactionData.emoji) == '✅'
+
+    try:
+        await bot.wait_for('reaction_add', timeout=60.0, check=check)
+        db = cluster[str(ctx.guild.id)]
+        db[PLAYER_DATA_COLLECTION].drop()
+
+        message = f"The leaderboard has been reset!"
+        embed = formatSuccessMessage(message, ctx.guild.icon_url, title="Leaderboard Reset")
+
+        await ctx.send(embed=embed)
+    except asyncio.TimeoutError:
+        message = f"The leaderboard reset request has timed out. Please try again."
+        embed = formatErrorMessage(message, ctx.guild.icon_url)
+
+        await ctx.send(embed=embed)
+
 
 
 @bot.command(name="addCharacterRoles",

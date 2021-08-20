@@ -81,7 +81,8 @@ smashUltimateCharacterList = [
     "Byleth",
     "Min Min",
     "Steve",
-    "Sephiroth"
+    "Sephiroth",
+    "Kazuya"
 ]
 
 smashUltimateCharacterListAliases = {
@@ -125,8 +126,8 @@ smashUltimateCharacterListAliases = {
     "minmin": "Min Min",
     "alex": "Steve",
     "enderman": "Steve",
-    "sephi": "Sephiroth"
-
+    "sephi": "Sephiroth",
+    "kazu": "Kazuya"
 }
 
 for character in smashUltimateCharacterList:
