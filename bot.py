@@ -544,7 +544,7 @@ async def updateRoles(ctx):
                 await member.remove_roles(role)
             except discord.Forbidden:
                 embed = formatErrorMessage("The bot does not have permission to remove roles. Ensure that the bot permissions are higher than all roles associated with ranked tiers.", ctx.guild.icon_url)
-                ctx.send(embed=embed)
+                await ctx.send(embed=embed)
                 return
         _, tier_index = getCurrentTier(points, guild.id)
 
