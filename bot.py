@@ -145,7 +145,7 @@ async def on_ready():
 
 @bot.command(name="changeCommandPrefix",
              help="This command changes the bot's command prefix. Only usable by server admins.",
-             usage="newCommandPrefix",
+             usage="changeCommandPrefix newCommandPrefix",
              aliases=["ChangeCommandPrefix", "changecommandprefix", "ChangeCommandprefix",
                       "changeCommandprefix", "ChangecommandPrefix, Changecommandprefix", "changecommandPrefix"])
 async def changeCommandPrefix(ctx, command_prefix: str):
@@ -163,7 +163,7 @@ async def changeCommandPrefix(ctx, command_prefix: str):
 
 @bot.command(name="viewPointsFormulas",
               help="Lets you see what the formulas are for when someone wins or loses a match.",
-              usage="")
+              usage="viewPointsFormulas")
 async def viewPointsFormulas(ctx):
     db = cluster[str(ctx.guild.id)]
     collection = db[CONFIG_COLLECTION]
@@ -193,7 +193,7 @@ async def viewPointsFormulas(ctx):
                   "'POINT_DIFFERENCE'. Be sure to use a space between every symbol. "
                   "TIER_DIFFERENCE indicates how many tiers the winner is above the loser. POINT_DIFFERENCE indicates "
                   "how many more points the winner has over the loser. An example formula would be `5 + ( -1 * POINT_DIFFERENCE / 8 )`.",
-             usage='"formula" minPointsGained (optional) maxPointsGained (optional)'
+             usage='pointsGained "formula" minPointsGained (optional) maxPointsGained (optional)'
              )
 async def changePointsGainedFomula(ctx, formula: str, minRange=None, maxRange=None):
     db = cluster[str(ctx.guild.id)]
@@ -243,7 +243,7 @@ async def changePointsGainedFomula(ctx, formula: str, minRange=None, maxRange=No
                   "TIER_DIFFERENCE indicates how many tiers the winner is above the loser. POINT_DIFFERENCE indicates "
                   "how many more points the winner has over the loser. An example formula would be `5 + ( -1 * POINT_DIFFERENCE / 8 )`. "
                   "\n \n This should be a positive number, as this number will be subtracted from the loser's point total.",
-             usage='"formula" minPointsLost (optional) maxPointsLost (optional)'
+             usage='pointsLost "formula" minPointsLost (optional) maxPointsLost (optional)'
              )
 async def changePointsLostFomula(ctx, formula: str, minRange=None, maxRange=None):
     db = cluster[str(ctx.guild.id)]
@@ -287,7 +287,7 @@ async def changePointsLostFomula(ctx, formula: str, minRange=None, maxRange=None
 
 
 @bot.command(name="setTier",
-             usage="roleName points",
+             usage="setTier roleName points",
              help="Be sure the role name already is an existing role before using this command. "
                   "Also note that the number of points is the lower bound for reaching this tier/rank.",
              aliases=["settier", "SetTier", "Settier"])
@@ -317,7 +317,7 @@ async def setTier(ctx, roleName: str, points: int):
 
 
 @bot.command(name="removeTier",
-             usage="roleName",
+             usage="removeTier roleName",
              help="Be sure the role name already is currently set before removing",
              aliases=["removetier", "RemoveTier", "Removetier"])
 async def removeTier(ctx, roleName: str):
@@ -350,7 +350,7 @@ async def removeTier(ctx, roleName: str):
 
 
 @bot.command(name="viewTiers",
-             usage="",
+             usage="viewTiers",
              help="Displays the tier names and their minimum point values.",
              aliases=["viewtiers", "ViewTiers", "Viewtiers"])
 async def viewTiers(ctx):
@@ -372,7 +372,7 @@ async def viewTiers(ctx):
 
 @bot.command(name='leaderboard',
              help="Displays the ranked leaderboard for this server. You may also add an argument that is a tier if you would like to see te rankings for only that tier.",
-             usage="tier (optional)",
+             usage="leaderboard tier (optional)",
              aliases=["Leaderboard", "LeaderBoard", "leaderBoard"])
 async def displayLeaderboard(ctx, tier=None):
     leaderboard = []
@@ -420,7 +420,7 @@ async def displayLeaderboard(ctx, tier=None):
 
 
 @bot.command(name='report',
-             usage="@winner, @loser",
+             usage="report @winner, @loser",
              help="Report the reuslts of a set with this. Be sure to tag the winner first and the loser second. "
                   "Afterward, the bot will post a message for the players to confirm, at which point, "
                   "the resulting points will be adjusted.",
@@ -464,7 +464,7 @@ async def reportResult(ctx, winnerMention: str, loserMention: str):
 @bot.command(name='adjust',
              help="Manually adjusts the score of the mentioned player. Can only be called by members with roles that "
                   "can report scores. Only usable by server admins.",
-             usage="<@Member> <PointChange>",
+             usage="adjust <@Member> <PointChange>",
              aliases=["Adjust", "adjustPoints", "AdjustPoints", "adjustpoints"])
 async def adjustPoints(ctx, mention: str, points: int):
     playerId = getIDFromMention(mention)
@@ -507,7 +507,7 @@ async def adjustPoints(ctx, mention: str, points: int):
 
 
 @bot.command(name='updateMemberTiers',
-             usage="",
+             usage="updateMemberTiers",
              aliases=["UpdateMemberTiers"],
              help="This updates the tiers for all players. Should primarily be used after updating the thresholds for tiers.")
 async def updateRoles(ctx):
@@ -534,7 +534,8 @@ async def updateRoles(ctx):
 
     for player in data:
         points = player[POINTS_KEY]
-        member = await try_fetch_member(player[ID_KEY], guild)
+        member = await try_fetch_member(int(player[ID_KEY]), guild)
+        print(member)
         if not member:
             continue
 
@@ -557,7 +558,7 @@ async def updateRoles(ctx):
 
 
 @bot.command(name="removeMember",
-             usage="@member",
+             usage="removeMember @member",
              aliases=["RemoveMember", "removemember", "Removemember", "deleteMember", "DeleteMember", "deletemember", "Deletemember"],
              help="This removes a member from the leaderboard."
              )
@@ -588,7 +589,7 @@ async def removeMember(ctx, mention: str):
 
 
 @bot.command(name="resetLeaderboard",
-             usage="",
+             usage="resetLeaderboard",
              aliases=["ResetLeaderboard", "resetleaderboard", "Resetleaderboard"],
              help="This completely resets the leaderboard."
              )
@@ -624,7 +625,7 @@ async def resetLeaderboard(ctx):
 
 
 @bot.command(name="addCharacterRoles",
-             usage=f"game\n"
+             usage=f"addCharacterRoles game\n"
                    f"The currently supported games are {gamesSupported}",
              aliases=["AddCharacterRoles", "createCharacterRoles", "CreateCharacterRoles"],
              help="This adds the character roles for a given game. For your convenience, it is imperative that you do not change the names of these roles and that you ensure that the role for this bot is above these roles.")
@@ -661,7 +662,7 @@ async def addCharacterRoles(ctx, game: str):
 
 
 @bot.command(name="deleteCharacterRoles",
-             usage=f"game\n"
+             usage=f"deleteCharacterRoles game\n"
                    f"The currently supported games are {gamesSupported}",
              aliases=["DeleteCharacterRoles"],
              help="This deletes the character roles for a given game.")
@@ -694,7 +695,7 @@ async def deleteCharacterRoles(ctx, game: str):
 
 
 @bot.command(name="character",
-             usage=f"game character\n"
+             usage=f"character game character\n"
                    f"The currently supported games are {gamesSupported}",
              aliases=["Character"],
              help="This toggles whether or not the author has the listed role. The role will be added if they do not already have it. If they already have the role, it will be removed.")
@@ -748,7 +749,7 @@ async def toggleCharacterRoleForPlayer(ctx, game: str, *characterAliasWords):
 
 
 @bot.command(name="viewCharacterRoles",
-             usage=f"game\n"
+             usage=f"viewCharacterRoles game\n"
                    f"The currently supported games are {gamesSupported}",
              aliases=["ViewCharacterRoles"],
              help="This displays the characters for a given game.")
@@ -791,7 +792,7 @@ async def matchResultPoints(winner_id, loser_id, guild_id):
 
     points_for_members_in_server = []
     for entry in data:
-        member = await try_fetch_member(entry[ID_KEY], bot.get_guild(guild_id))
+        member = await try_fetch_member(int(entry[ID_KEY]), bot.get_guild(guild_id))
         if member:
             points_for_members_in_server.append(entry[POINTS_KEY])
 
